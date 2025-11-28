@@ -1,18 +1,36 @@
-#include <Arduino.h>
+# include <Arduino.h>
+# include <randLIB.h>
+# include <time.h>
 
-// put function declarations here:
-int myFunction(int, int);
+int R = PK_5;
+int G = PK_6;
+int B = PK_7;
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+    pinMode(R, OUTPUT);
+    pinMode(G, OUTPUT);
+    pinMode(B, OUTPUT);
+    
 }
+
+// the loop function runs over and over again forever
+/*
+void loop() {
+    int randseed = time(0);
+    randLIB_add_seed(randseed);
+    analogWrite(R,randLIB_get_random_in_range(0,255));
+    randseed = time(0);
+    analogWrite(G,randLIB_get_random_in_range(0,255));
+    randseed = time(0);
+    analogWrite(B,randLIB_get_random_in_range(0,255));
+}*/
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+    int randseed = time(0);
+    randLIB_add_seed(randseed);
+    analogWrite(R,200);
+    randseed = time(0);
+    analogWrite(G,200);
+    randseed = time(0);
+    analogWrite(B,200);
 }
