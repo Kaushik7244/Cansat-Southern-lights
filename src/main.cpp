@@ -4,12 +4,13 @@
 #include <ctime>
 #include <TinyGPS++.h>
 #include "Altitude.h"
+#include "Go_to_checkpoint.h"
 #include "mbed.h"
 
 
 Sensor barometer(SENSOR_ID_BARO);
 Sensor temprature(SENSOR_ID_TEMP);
-SensorQuaternion relpos(SENSOR_ID_GAMERV);
+SensorQuaternion ori(SENSOR_ID_ORI);
 SensorXYZ gyro(SENSOR_ID_GYRO);
 Altitude* alt = nullptr;
 TinyGPSPlus gps;
@@ -18,7 +19,7 @@ mbed::BufferedSerial gpsDev(digitalPinToPinName(A1), digitalPinToPinName(A0), 96
 
 double pressure;
 double temp;
-double gyro_val;
+double gyro_val; 
 bool alt_init = false;
 int counter = 0;
 
@@ -40,7 +41,7 @@ void setup() {
   while(!BHY2Host.begin());
   barometer.begin();
   temprature.begin();
-  relpos.begin();
+  ori.begin();
   gyro.begin();
 
   //Her lager vi en overskrift over hvilke data som skrives i de ulike kolonnene.
@@ -78,10 +79,10 @@ void loop() {
   std::time_t now = std::time(nullptr);
   // read quaternion from game rotation vector
   // read quaternion values from game rotation vector
-  w_ori = relpos.w();
-  x_ori = relpos.x();
-  y_ori = relpos.y();
-  z_ori = relpos.z();
+  w_ori = ori.w();
+  x_ori = ori.x();
+  y_ori = ori.y();
+  z_ori = ori.z();
 
   yaw = atan2(2*(w_ori*z_ori + x_ori*y_ori), 1 - 2*(y_ori*y_ori + z_ori*z_ori));
   yaw_deg = yaw * 180.0 / PI;
@@ -140,6 +141,7 @@ void loop() {
   Serial.print(latitude); //latitude kordinaten
   Serial.print("; "); //NB - legg merke til linjeskift
 
+  
 
 }
 
