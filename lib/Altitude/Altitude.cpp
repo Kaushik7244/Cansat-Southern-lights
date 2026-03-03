@@ -1,4 +1,3 @@
-#pragma once
 #include "Altitude.h"
 #include <math.h>
 

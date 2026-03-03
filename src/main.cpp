@@ -12,10 +12,20 @@ Sensor barometer(SENSOR_ID_BARO);
 Sensor temprature(SENSOR_ID_TEMP);
 SensorQuaternion ori(SENSOR_ID_ORI);
 SensorXYZ gyro(SENSOR_ID_GYRO);
-Altitude* alt = nullptr;
+Altitude alt;
 TinyGPSPlus gps;
 // GPS on custom pins: RX=A0, TX=A1 (BufferedSerial expects TX, RX)
 mbed::BufferedSerial gpsDev(digitalPinToPinName(A1), digitalPinToPinName(A0), 9600);
+
+struct checkpoint {
+  double x, y;
+};
+
+checkpoint arr[100] = 
+{
+  {.x = 1, .y = 1},{.x = 1, .y = 2}
+}; // checkpoint long lat coords
+
 
 double pressure;
 double temp;
@@ -73,6 +83,10 @@ void setup() {
   Serial.print("Paretschute status"); //lufttrykk 
   Serial.println("; "); //NB - legg merke til linjeskift
 
+   
+
+    
+
 };
 
 void loop() {
@@ -89,12 +103,16 @@ void loop() {
 
   temp =  temprature.value();
   pressure = barometer.value();
+  
+
+  
+  //checkpoint extractor
 
   if (alt_init == false){
-    alt = new Altitude(temp, 0, pressure);
+    alt = Altitude(temp, 0, pressure);
     alt_init = true;
   }
-  altitude = alt->get_alt(temp, pressure);
+  altitude = alt.get_alt(temp, pressure);
 
   // read from BufferedSerial
   while (gpsDev.readable()) {
