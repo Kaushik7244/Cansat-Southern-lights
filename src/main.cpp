@@ -2,6 +2,7 @@
 #include <Arduino_BHY2Host.h>
 #include <list>
 #include <ctime>
+#include <memory>
 #include <TinyGPS++.h>
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
@@ -14,14 +15,14 @@ SensorQuaternion ori(SENSOR_ID_ORI);
 SensorXYZ gyro(SENSOR_ID_GYRO);
 Altitude alt;
 TinyGPSPlus gps;
+std::unique_ptr<Go_to_checkpoint> Target;
 // GPS on custom pins: RX=A0, TX=A1 (BufferedSerial expects TX, RX)
 mbed::BufferedSerial gpsDev(digitalPinToPinName(A1), digitalPinToPinName(A0), 9600);
 
-struct checkpoint {
+struct checkpoints {
   double x, y;
 };
-
-checkpoint arr[100] = 
+const checkpoints arr[100] = 
 {
   {.x = 1, .y = 1},{.x = 1, .y = 2}
 }; // checkpoint long lat coords
@@ -32,7 +33,9 @@ double temp;
 double gyro_val; 
 bool alt_init = false;
 int counter = 0;
-
+int checkpoints_counter = 0;
+int checkpoint_start = false;
+int checkpoint_reached = false;
 double altitude; // height in meters
 
 double yaw;
@@ -104,10 +107,8 @@ void loop() {
   temp =  temprature.value();
   pressure = barometer.value();
   
-
-  
   //checkpoint extractor
-
+//---------------------------------------------------------------------------------------------------------------------------------
   if (alt_init == false){
     alt = Altitude(temp, 0, pressure);
     alt_init = true;
@@ -121,6 +122,7 @@ void loop() {
   }
 
   double longitude = 0; 
+
   if (gps.location.isValid() == true){
     
     longitude = gps.location.lng();
@@ -129,12 +131,32 @@ void loop() {
     longitude = -1;
 
   double latitude = 0; // setter latitude til 0 når programmet starter
+
   if (gps.location.isValid() == true){
     
     latitude = gps.location.lat();
   }
   else
     latitude = -1;
+
+  //---------------------------------------------------------------------------------------------------------------------------------------------
+
+  if (checkpoint_start == false)
+  {
+    Target = std::make_unique<Go_to_checkpoint>(arr[0].x,arr[0].y);
+    checkpoint_start = true;
+  }
+  else if (checkpoint_reached == true)
+  {
+    checkpoints_counter++;
+    Target = std::make_unique<Go_to_checkpoint>(arr[checkpoints_counter].x,arr[checkpoints_counter].y);
+    checkpoint_reached = false;
+
+  }
+  
+
+
+
 
   Serial.print("Fallschirmjäger"); //navn skrives som tekst
   Serial.print("; "); //delimiter skrives som tekst
