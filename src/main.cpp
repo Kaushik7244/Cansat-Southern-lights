@@ -15,9 +15,12 @@ SensorQuaternion ori(SENSOR_ID_ORI);
 SensorXYZ gyro(SENSOR_ID_GYRO);
 Altitude alt;
 TinyGPSPlus gps;
-std::unique_ptr<Go_to_checkpoint> Target;
 // GPS on custom pins: RX=A0, TX=A1 (BufferedSerial expects TX, RX)
 mbed::BufferedSerial gpsDev(digitalPinToPinName(A1), digitalPinToPinName(A0), 9600);
+
+//---------------------------------------------------------------------------------------------------------------------------------------------
+
+//checkpoint system init
 
 struct checkpoints {
   double x, y;
@@ -26,7 +29,9 @@ const checkpoints arr[100] =
 {
   {.x = 1, .y = 1},{.x = 1, .y = 2}
 }; // checkpoint long lat coords
+std::unique_ptr<Go_to_checkpoint> Target = std::make_unique<Go_to_checkpoint>(arr[0].x,arr[0].y);
 
+//---------------------------------------------------------------------------------------------------------------------------------------------
 
 double pressure;
 double temp;
@@ -34,12 +39,14 @@ double gyro_val;
 bool alt_init = false;
 int counter = 0;
 int checkpoints_counter = 0;
-int checkpoint_start = false;
 int checkpoint_reached = false;
 double altitude; // height in meters
-
 double yaw;
+double pitch;
+double roll;
 double yaw_deg;
+double pitch_deg;
+double roll_deg;
 double w_ori;
 double x_ori;     // swap
 double y_ori;    // swap + invert
@@ -56,6 +63,8 @@ void setup() {
   temprature.begin();
   ori.begin();
   gyro.begin();
+
+//---------------------------------------------------------------------------------------------------------------------------------------------
 
   //Her lager vi en overskrift over hvilke data som skrives i de ulike kolonnene.
   
@@ -94,21 +103,35 @@ void setup() {
 
 void loop() {
   std::time_t now = std::time(nullptr);
-  // read quaternion from game rotation vector
-  // read quaternion values from game rotation vector
+//---------------------------------------------------------------------------------------------------------------------------------
+  //casat oirentation 
+
   w_ori = ori.w();
   x_ori = ori.x();
   y_ori = ori.y();
   z_ori = ori.z();
 
   yaw = atan2(2*(w_ori*z_ori + x_ori*y_ori), 1 - 2*(y_ori*y_ori + z_ori*z_ori));
-  yaw_deg = yaw * 180.0 / PI;
+
+  roll = atan2(2*(w_ori*x_ori + y_ori*z_ori), 1 - 2*(x_ori*x_ori + y_ori*y_ori));
+
+  double sinp = 2*(w_ori*y_ori - z_ori*x_ori);
+  if (abs(sinp) >= 1)
+      pitch = copysign(PI/2, sinp);  // clamp at 90°
+  else
+      pitch = asin(sinp);
+ 
+  roll_deg  = roll  * 180.0 / PI;
+  pitch_deg = pitch * 180.0 / PI;
+  yaw_deg   = yaw   * 180.0 / PI;
 
   temp =  temprature.value();
   pressure = barometer.value();
   
-  //checkpoint extractor
+  
 //---------------------------------------------------------------------------------------------------------------------------------
+  //checkpoint extractor
+
   if (alt_init == false){
     alt = Altitude(temp, 0, pressure);
     alt_init = true;
@@ -139,24 +162,12 @@ void loop() {
   else
     latitude = -1;
 
-  //---------------------------------------------------------------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------------------------------------------------------
+// glider controll
 
-  if (checkpoint_start == false)
-  {
-    Target = std::make_unique<Go_to_checkpoint>(arr[0].x,arr[0].y);
-    checkpoint_start = true;
-  }
-  else if (checkpoint_reached == true)
-  {
-    checkpoints_counter++;
-    Target = std::make_unique<Go_to_checkpoint>(arr[checkpoints_counter].x,arr[checkpoints_counter].y);
-    checkpoint_reached = false;
 
-  }
   
-
-
-
+//---------------------------------------------------------------------------------------------------------------------------------------------
 
   Serial.print("Fallschirmjäger"); //navn skrives som tekst
   Serial.print("; "); //delimiter skrives som tekst
@@ -180,6 +191,17 @@ void loop() {
   Serial.print("; "); 
   Serial.print(latitude); //latitude kordinaten
   Serial.print("; "); //NB - legg merke til linjeskift
+
+//---------------------------------------------------------------------------------------------------------------------------------------------
+// nav controll  
+
+  if (checkpoint_reached == true)
+  {
+    checkpoints_counter++;
+    Target = std::make_unique<Go_to_checkpoint>(arr[checkpoints_counter].x,arr[checkpoints_counter].y);
+    checkpoint_reached = false;
+    //when cansat has reached desiered radius, switch checkpoint reached
+  }
 
   
 
