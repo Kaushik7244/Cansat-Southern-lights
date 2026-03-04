@@ -9,5 +9,5 @@ void setup() {
 
 void loop() {
   BHY2.update();
-  delay(10);
+  delay(1);
 }
