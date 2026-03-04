@@ -3,6 +3,8 @@
 #include <list>
 #include <ctime>
 #include <memory>
+#include <algorithm>
+#include <Servo.h>
 #include <TinyGPS++.h>
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
@@ -15,8 +17,11 @@ SensorQuaternion ori(SENSOR_ID_ORI);
 SensorXYZ gyro(SENSOR_ID_GYRO);
 Altitude alt;
 TinyGPSPlus gps;
+Servo break_right;
+Servo break_left;
 // GPS on custom pins: RX=A0, TX=A1 (BufferedSerial expects TX, RX)
 mbed::BufferedSerial gpsDev(digitalPinToPinName(A1), digitalPinToPinName(A0), 9600);
+
 
 //---------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -29,7 +34,7 @@ const checkpoints arr[100] =
 {
   {.x = 1, .y = 1},{.x = 1, .y = 2}
 }; // checkpoint long lat coords
-std::unique_ptr<Go_to_checkpoint> Target = std::make_unique<Go_to_checkpoint>(arr[0].x,arr[0].y);
+auto Target = std::make_unique<Go_to_checkpoint>(arr[0].x,arr[0].y);
 
 //---------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -40,6 +45,7 @@ bool alt_init = false;
 int counter = 0;
 int checkpoints_counter = 0;
 int checkpoint_reached = false;
+const double truning_rate = 0.8;
 double altitude; // height in meters
 double yaw;
 double pitch;
@@ -48,12 +54,9 @@ double yaw_deg;
 double pitch_deg;
 double roll_deg;
 double w_ori;
-double x_ori;     // swap
-double y_ori;    // swap + invert
+double x_ori;    
+double y_ori;    
 double z_ori; 
-
-
-
 
 void setup() {
   Serial.begin(115200);
@@ -63,6 +66,8 @@ void setup() {
   temprature.begin();
   ori.begin();
   gyro.begin();
+  break_left.attach(4);
+  break_right.attach(5);
 
 //---------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -95,34 +100,28 @@ void setup() {
   Serial.print("Paretschute status"); //lufttrykk 
   Serial.println("; "); //NB - legg merke til linjeskift
 
-   
-
-    
-
 };
 
 void loop() {
   std::time_t now = std::time(nullptr);
 //---------------------------------------------------------------------------------------------------------------------------------
   //casat oirentation 
-
+  //------------------------------------------------
+  // MAKE SURE TO ASSIGN ORIENTATIONS CORRECTL!!!
+  // IF YOU DONT KNOW HOW ASK CHAT!!!
   w_ori = ori.w();
   x_ori = ori.x();
   y_ori = ori.y();
   z_ori = ori.z();
+  //-------------------------------------------------
+
+  double norm = sqrt(w_ori*w_ori + x_ori*x_ori + y_ori*y_ori + z_ori*z_ori);
+  w_ori /= norm;
+  x_ori /= norm;
+  y_ori /= norm;
+  z_ori /= norm;
 
   yaw = atan2(2*(w_ori*z_ori + x_ori*y_ori), 1 - 2*(y_ori*y_ori + z_ori*z_ori));
-
-  roll = atan2(2*(w_ori*x_ori + y_ori*z_ori), 1 - 2*(x_ori*x_ori + y_ori*y_ori));
-
-  double sinp = 2*(w_ori*y_ori - z_ori*x_ori);
-  if (abs(sinp) >= 1)
-      pitch = copysign(PI/2, sinp);  // clamp at 90°
-  else
-      pitch = asin(sinp);
- 
-  roll_deg  = roll  * 180.0 / PI;
-  pitch_deg = pitch * 180.0 / PI;
   yaw_deg   = yaw   * 180.0 / PI;
 
   temp =  temprature.value();
@@ -138,6 +137,9 @@ void loop() {
   }
   altitude = alt.get_alt(temp, pressure);
 
+//---------------------------------------------------------------------------------------------------------------------------------
+  //gps reader
+
   // read from BufferedSerial
   while (gpsDev.readable()) {
     char c;
@@ -150,8 +152,9 @@ void loop() {
     
     longitude = gps.location.lng();
   }
-  else
+  else{
     longitude = -1;
+  }
 
   double latitude = 0; // setter latitude til 0 når programmet starter
 
@@ -159,16 +162,35 @@ void loop() {
     
     latitude = gps.location.lat();
   }
-  else
+  else{
     latitude = -1;
+  }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------
-// glider controll
+  // glider controll
+
+  auto target_heading = Target->Calc_desiered_heading(yaw_deg,longitude,latitude);
+  auto dist = Target->Calc_dist(longitude,latitude);
+
+  if (dist < 10){
+    checkpoints_counter++;
+    Target = std::make_unique<Go_to_checkpoint>(arr[checkpoints_counter].x,arr[checkpoints_counter].y);
+  }
+  else{
+
+    if (target_heading<-100) target_heading = -100;
+    if (target_heading>100)  target_heading = 100;
+
+    target_heading = target_heading*truning_rate;
+
+    if (target_heading < 0) break_left.write(0 + target_heading);
+    if (target_heading < 0) break_left.write(180 - target_heading);
+  }
 
 
   
 //---------------------------------------------------------------------------------------------------------------------------------------------
-
+  //csv printer
   Serial.print("Fallschirmjäger"); //navn skrives som tekst
   Serial.print("; "); //delimiter skrives som tekst
   
@@ -192,18 +214,5 @@ void loop() {
   Serial.print(latitude); //latitude kordinaten
   Serial.print("; "); //NB - legg merke til linjeskift
 
-//---------------------------------------------------------------------------------------------------------------------------------------------
-// nav controll  
-
-  if (checkpoint_reached == true)
-  {
-    checkpoints_counter++;
-    Target = std::make_unique<Go_to_checkpoint>(arr[checkpoints_counter].x,arr[checkpoints_counter].y);
-    checkpoint_reached = false;
-    //when cansat has reached desiered radius, switch checkpoint reached
-  }
-
-  
 
 }
-

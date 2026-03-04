@@ -10,17 +10,25 @@ Go_to_checkpoint::Go_to_checkpoint(double longitude, double latitude){
 
 double Go_to_checkpoint::Calc_desiered_heading(double current_heading, double current_long, double current_lat)
 {
-    double rel_x = desierd_long - current_long;  // east-west
-    double rel_y = desierd_lat  - current_lat;   // north-south
+    double rel_x = desierd_long - current_long;   // east-west
+    double rel_y = desierd_lat  - current_lat;    // north-south
 
-    double angle_rad = std::atan2(rel_x, rel_y);  // note order for compass
+    // Compass-style heading (0° = North)
+    double angle_rad = std::atan2(rel_x, rel_y);
     double desired_heading = angle_rad * 180.0 / M_PI;
 
+    // Convert to 0–360 range
     if (desired_heading < 0)
         desired_heading += 360.0;
 
-    double diff = std::fmod(std::abs(current_heading - desired_heading), 360.0);
-    return std::min(diff, 360.0 - diff);
+    // Signed turn error
+    double turn = desired_heading - current_heading;
+
+    // Wrap into [-180, 180]
+    while (turn > 180.0)  turn -= 360.0;
+    while (turn < -180.0) turn += 360.0;
+
+    return turn;
     //gir ut hvor mye og hvilket vei cansaten må snu
 }
 
