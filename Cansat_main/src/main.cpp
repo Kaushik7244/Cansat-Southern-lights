@@ -60,8 +60,8 @@ double z_ori;
 
 void setup() {
   Serial.begin(115200);
-  while(!Serial);
-  while(!BHY2Host.begin());
+  while(!Serial) Serial.println("you fucked up");
+  while(!BHY2Host.begin()) Serial.println("you fucked up");
   barometer.begin();
   temprature.begin();
   ori.begin();
