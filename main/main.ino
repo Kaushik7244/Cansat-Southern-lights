@@ -40,8 +40,8 @@ Go_to_checkpoint Target(arr[0].x, arr[0].y);
 int checkpoints_counter = 0;
 
 // ---------------- Variables ----------------
-float pressure;
-float temp;
+float pressure = 0;
+float temp = 0;
 bool alt_init = false;
 int counter = 0;
 
