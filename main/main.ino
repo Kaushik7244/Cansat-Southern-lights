@@ -73,6 +73,8 @@ float temp = 0;
 bool alt_init = false;
 bool flight_end = false;
 int counter = 0;
+bool crossed_500 = false;
+bool paratschute_deployed = false;
 
 
 const float turning_rate = 0.8;
@@ -99,6 +101,9 @@ void setup() {
 
   break_left.attach(4);
   break_right.attach(5);
+  break_left.write(180);
+  break_right.write(0);
+
   FILE *file = fopen("/fileSystem/telemetry.txt", "a");
   Serial.println("callsign;time(ms);counter;ntc;pressure;Alt(m);Longitude;Latitude");
   fprintf(file,"callsign;time(ms);counter;ntc;pressure;Alt(m);Longitude;Latitude"); // write data to file
@@ -138,7 +143,17 @@ void loop() {
   double longitude = -1;
   double latitude = -1;
 
-  //-------- camera ---------
+  // -------- partschute deploy ---------
+
+  if (altitude > 480) crossed_500 = true;
+  if ( crossed_500 == true && altitude < 60 && paratschute_deployed == false){ 
+    paratschute_deployed = true;
+    break_left.write(SERVO_NEUTRAL);
+    break_right.write(SERVO_NEUTRAL);
+
+  }
+
+  // -------- camera ---------
 
   if (millis() % 10 == 0){
     unsigned char *imageData = captureImage();
@@ -150,17 +165,17 @@ void loop() {
     gps.encode(gpsDev.read());
   }
 
-
   if (gps.location.isValid()) {
     longitude = gps.location.lng();
     latitude = gps.location.lat();
   }
 
   // -------- Navigation --------
+
   float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
   float dist = Target.Calc_dist(longitude, latitude);
 
-  while (flight_end == false){
+  if (flight_end == false && paratschute_deployed == true){
     if (dist > 5 && checkpoints_counter < 99 && arr[checkpoints_counter].x != 0 &&  arr[checkpoints_counter].y != 0) {
       checkpoints_counter++;
       Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
@@ -171,29 +186,28 @@ void loop() {
       Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
       flight_end = true;
     }
+
+    // limit turn command
+    if (target_heading < -100) target_heading = -100;
+    if (target_heading > 100) target_heading = 100;
+
+    target_heading *= turning_rate;
+
+    int leftServo = SERVO_NEUTRAL;
+    int rightServo = SERVO_NEUTRAL;
+
+    if (target_heading > 0) {
+      rightServo = SERVO_NEUTRAL - map(target_heading, 0, 100, 0, SERVO_MAX_PULL);
+    }
+
+    if (target_heading < 0) {
+      leftServo = SERVO_NEUTRAL - map(abs(target_heading), 0, 100, 0, SERVO_MAX_PULL);
+    }
+
+    break_left.write(leftServo);
+    break_right.write(rightServo);
   }
-  
-  
 
-  // limit turn command
-  if (target_heading < -100) target_heading = -100;
-  if (target_heading > 100) target_heading = 100;
-
-  target_heading *= turning_rate;
-
-  int leftServo = SERVO_NEUTRAL;
-  int rightServo = SERVO_NEUTRAL;
-
-  if (target_heading > 0) {
-    rightServo = SERVO_NEUTRAL - map(target_heading, 0, 100, 0, SERVO_MAX_PULL);
-  }
-
-  if (target_heading < 0) {
-    leftServo = SERVO_NEUTRAL - map(abs(target_heading), 0, 100, 0, SERVO_MAX_PULL);
-  }
-
-  break_left.write(leftServo);
-  break_right.write(rightServo);
 
   // -------- Telemetry --------
 
@@ -311,11 +325,3 @@ void saveImage(unsigned char *imageData, const char* imagePath){
     fclose(file);
 }
 
-void countDownBlink(){
-    for (int i = 0; i < 6; i++){
-        digitalWrite(LEDG, i % 2);
-        delay(500);
-    }
-    digitalWrite(LEDG, HIGH);
-    digitalWrite(LEDB, LOW);
-}
