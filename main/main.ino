@@ -151,7 +151,6 @@ void loop() {
     paratschute_deployed = true;
     break_left.write(SERVO_NEUTRAL);
     break_right.write(SERVO_NEUTRAL);
-
   }
 
   // -------- camera ---------
@@ -237,13 +236,13 @@ void loop() {
   msg += ";";
   msg += yaw_deg;
 
+  Serial.println(msg);
 
+  // ---- SD storage -----
 
   int str_length = msg.length();
   char telemtry_packet[str_length + 1];
   strcpy(telemtry_packet, msg.c_str());
-
-  Serial.println(msg);
   FILE *file = fopen("/fileSystem/telemetry.txt", "a");
   fprintf(file,telemtry_packet); // write data to file
   fprintf(file,"\r\n");
