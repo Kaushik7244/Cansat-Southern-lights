@@ -66,6 +66,7 @@ const Checkpoint arr[100] = {
 
 Go_to_checkpoint Target(arr[0].x, arr[0].y);
 int checkpoints_counter = 0;
+int final_checkpoint;
 
 // ---------------- Variables ----------------
 float pressure = 0;
@@ -155,7 +156,9 @@ void loop() {
 
   // -------- camera ---------
 
-  if (millis() % 10 == 0){
+  static unsigned long lastCapture = 0;
+  if (!(flight_end && altitude < 6) && millis() - lastCapture >= 10) {
+    lastCapture = millis();
     unsigned char *imageData = captureImage();
     saveImage(imageData, IMAGE_PATH);
   }
@@ -175,17 +178,21 @@ void loop() {
   float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
   float dist = Target.Calc_dist(longitude, latitude);
 
-  if (flight_end == false && paratschute_deployed == true){
-    if (dist > 5 && checkpoints_counter < 99 && arr[checkpoints_counter].x != 0 &&  arr[checkpoints_counter].y != 0) {
-      checkpoints_counter++;
+  if (paratschute_deployed == true){
+    if (!flight_end && checkpoints_counter < 99 && arr[checkpoints_counter].x != 0 && arr[checkpoints_counter].y != 0) {
+    // Only increment when you REACH the checkpoint
+      if (dist <= 5) {
+          checkpoints_counter++;
+      }
       Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
     }
-    else{
-      fileSystem.unmount();
+    else if (!flight_end) {
+      // End flight (runs only once)
       checkpoints_counter -= 1;
       Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
       flight_end = true;
     }
+
 
     // limit turn command
     if (target_heading < -100) target_heading = -100;
@@ -230,6 +237,8 @@ void loop() {
   msg += ";";
   msg += yaw_deg;
 
+
+
   int str_length = msg.length();
   char telemtry_packet[str_length + 1];
   strcpy(telemtry_packet, msg.c_str());
@@ -237,8 +246,10 @@ void loop() {
   Serial.println(msg);
   FILE *file = fopen("/fileSystem/telemetry.txt", "a");
   fprintf(file,telemtry_packet); // write data to file
-  fprintf(file,"/r/n");
+  fprintf(file,"\r\n");
   fclose(file);
+
+  if (flight_end && altitude < 6) fileSystem.unmount();
 
   delay(1);
 }
