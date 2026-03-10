@@ -5,6 +5,7 @@
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
 
+
 // ---------------- Sensors ----------------
 Sensor barometer(SENSOR_ID_BARO);
 Sensor temprature(SENSOR_ID_TEMP);
@@ -115,7 +116,7 @@ void loop() {
   float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
   float dist = Target.Calc_dist(longitude, latitude);
 
-  if (dist < 10 && checkpoints_counter < 99) {
+  if (dist > 5 && checkpoints_counter < 99) {
     checkpoints_counter++;
     Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
   }
@@ -141,16 +142,27 @@ void loop() {
   break_right.write(rightServo);
 
   // -------- Telemetry --------
-  Serial.print("Fallschirmjäger;");
-  Serial.print(millis()); Serial.print(";");
-  Serial.print(counter++); Serial.print(";");
-  Serial.print(temp); Serial.print(";");
-  Serial.print(pressure); Serial.print(";");
-  Serial.print(altitude); Serial.print(";");
-  Serial.print(longitude,5); Serial.print(";");
-  Serial.print(latitude,5); Serial.print(";");
-  Serial.print(target_heading); Serial.print(";");
-  Serial.println(yaw_deg);
+
+  String msg = "Fallschirmjäger;";
+  msg += millis();
+  msg += ";";
+  msg += counter++;
+  msg += ";";
+  msg += temp;
+  msg += ";";
+  msg += pressure;
+  msg += ";";
+  msg += altitude;
+  msg += ";";
+  msg += longitude;
+  msg += ";";
+  msg += latitude;
+  msg += ";";
+  msg += target_heading;
+  msg += ";";
+  msg += yaw_deg;
+
+  Serial.println(msg);
 
   delay(1);
 }
