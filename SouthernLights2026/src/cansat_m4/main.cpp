@@ -1,5 +1,8 @@
 #include <RPC.h>
+#include <Wire.h>
 #include <DFRobot_BME68x.h>
+
+#define SLDEBUG
 
 // ----- Southern lights ---------
 // THIS IS THE SECONDARY CORE (M4) LOGIC
@@ -13,7 +16,7 @@ int   localLoop;
 int   cnt         = 0;
 float temperature, pressure, humidity, gasresistance, altitude;
 
-DFRobot_BME68x_I2C bme(0x77); // 0x77 I2C address
+DFRobot_BME68x_I2C bme(0x77, &Wire); // 0x77 confirmed by I2C scan
 
 // ---------------------------------------------------------------------------
 // In-memory flight log
@@ -83,12 +86,46 @@ void dumpLog()
 // Setup
 // ---------------------------------------------------------------------------
 
+static volatile bool m7_ready = false;
+static void onM7Ready() { m7_ready = true; }
+
 void setup()
 {
     RPC.begin();
     RPC.bind("DumpM4Log", dumpLog);
+    RPC.bind("M7Ready",   onM7Ready);
     RPC.call("setH4CoreLoop", localLoop++);
 
+    // Wait until M7 has completed its own setup (WiFi, Nicla, etc.)
+    // before touching the shared I2C bus.
+    while (!m7_ready) delay(50);
+
+    // I2C bus exercise — reads BME688 chip-ID register (0xD0) 20 times to prime
+    // the bus with real ACK transactions before bme.begin().
+    // Wire.begin() must be called here to initialise M4's Wire software object;
+    // even though M7 initialises the shared I2C hardware, M4's Wire instance is
+    // independent and must be initialised separately.
+    auto i2cExercise = []() {
+        Wire.begin();
+        Wire.setClock(400000);
+        delay(50);
+        uint8_t acks = 0;
+        for (uint8_t i = 0; i < 20; i++) {
+            Wire.beginTransmission(0x77);
+            Wire.write(0xD0);              // chip-ID register
+            Wire.endTransmission();
+            uint8_t cnt = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
+            if (cnt > 0) { Wire.read(); acks++; }
+            delay(5);
+        }
+        char buf[50];
+        snprintf(buf, sizeof(buf), "M4 I2C exercise: %u/20 reads ACKed\r\n", acks);
+        RPC.print(buf);
+    };
+    i2cExercise();
+    RPC.print("M4 setup: I2C bus exercise done\r\n");
+
+    RPC.print("M4 setup: calling bme.begin()\r\n");
     uint8_t bme_rslt = 1;
     while (bme_rslt != 0)
     {
@@ -97,9 +134,11 @@ void setup()
         {
             RPC.call("M4Error");
             RPC.print("bme begin failure!\r\n");
-            delay(10000);
+            delay(2000);
+            i2cExercise();   // re-exercise before each retry
         }
     }
+    RPC.print("M4 setup: bme.begin() OK\r\n");
 
     localLoop = 0;
 }
@@ -110,9 +149,24 @@ void setup()
 
 void loop()
 {
+#ifdef SLDEBUG
+    RPC.print("M4 loop: delay\r\n");
+#endif
     delay(1000);
+
+#ifdef SLDEBUG
+    RPC.print("M4 loop: setGasHeater\r\n");
+#endif
     bme.setGasHeater(320, 100);
+
+#ifdef SLDEBUG
+    RPC.print("M4 loop: startConvert\r\n");
+#endif
     bme.startConvert();
+
+#ifdef SLDEBUG
+    RPC.print("M4 loop: update\r\n");
+#endif
     bme.update();
 
     // DFRobot_BME68x unit conversions — library returns fixed-point integers as float:
@@ -121,20 +175,21 @@ void loop()
     //   readPressure()    → Pa         → divide by 100  → hPa   ← verify on first run
     //   readAltitude()    → m          → no conversion needed
     temperature   = bme.readTemperature() / 100.0f;  // °C
-    pressure      = bme.readPressure();               // Pa or hPa — if ~101325 add / 100.0f
+    pressure      = bme.readPressure() / 100.0f;      // Pa → hPa (confirmed: raw ~98682)
     humidity      = bme.readHumidity()    / 1000.0f;  // %RH
     gasresistance = bme.readGasResistance();           // Ω
     altitude      = bme.readAltitude();                // m
 
-    // Store to local in-memory log before pushing over RPC
-    logSample();
+#ifdef SLDEBUG
+    {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "M4 data: T=%.2f P=%.2f H=%.2f alt=%.1f\r\n",
+                 temperature, pressure, humidity, altitude);
+        RPC.print(buf);
+    }
+#endif
 
-    // RPC contract — M7 UpdateSensorPackage expects:
-    //   temperature   °C   float
-    //   pressure      hPa  float
-    //   humidity      %RH  float
-    //   gasresistance Ω    float  (M7 currently ignores — reserved for TertiaryData)
-    //   altitude      m    float
+    logSample();
     RPC.call("UpdateSensorPackage", temperature, pressure, humidity, gasresistance, altitude);
 
     cnt++;

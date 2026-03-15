@@ -166,7 +166,7 @@ public:
 class DFRobot_BME68x_I2C : public DFRobot_BME68x
 {
   public:
-    DFRobot_BME68x_I2C(uint8_t I2CAddr);
+    DFRobot_BME68x_I2C(uint8_t I2CAddr, TwoWire* wire = &Wire);
 
     void setConvertAndUpdate(void);
 };

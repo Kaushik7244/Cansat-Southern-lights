@@ -202,15 +202,19 @@ void DFRobot_BME68x::writeParamHelper(uint8_t reg, uint8_t dat, uint8_t addr)
   bme68x_sensor.write(bme68x_sensor.dev_id, reg, &var1, 1);
 }
 
+static TwoWire* _bme68x_wire = &Wire;
+
 static int8_t bme68x_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
 {
-  Wire.begin();
-  Wire.beginTransmission(dev_id);
-  Wire.write(reg_addr);
-  Wire.endTransmission();
-  Wire.requestFrom(dev_id, (uint8_t)len);
-  while(Wire.available()) {
-    *data = Wire.read();
+  // Wire.begin() intentionally NOT called here — caller must initialise Wire once
+  // before the first transaction. Reinitialising on every read resets the STM32H7
+  // I2C peripheral and discards the bus state established by the setup exercise.
+  _bme68x_wire->beginTransmission(dev_id);
+  _bme68x_wire->write(reg_addr);
+  _bme68x_wire->endTransmission();
+  _bme68x_wire->requestFrom(dev_id, (uint8_t)len);
+  while(_bme68x_wire->available()) {
+    *data = _bme68x_wire->read();
     data ++;
   }
   return 0;
@@ -218,21 +222,22 @@ static int8_t bme68x_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
 
 static int8_t bme68x_i2c_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
 {
-  Wire.begin();
-  Wire.beginTransmission(dev_id);
-  Wire.write(reg_addr);
+  // Wire.begin() intentionally NOT called here — see bme68x_i2c_read comment.
+  _bme68x_wire->beginTransmission(dev_id);
+  _bme68x_wire->write(reg_addr);
   while(len --) {
-    Wire.write(*data);
+    _bme68x_wire->write(*data);
     data ++;
   }
-  Wire.endTransmission();
+  _bme68x_wire->endTransmission();
   return 0;
 }
 
-DFRobot_BME68x_I2C::DFRobot_BME68x_I2C(uint8_t I2CAddr_) :
+DFRobot_BME68x_I2C::DFRobot_BME68x_I2C(uint8_t I2CAddr_, TwoWire* wire) :
                     DFRobot_BME68x(bme68x_i2c_read, bme68x_i2c_write, bme68x_delay_ms, eBME68X_INTERFACE_I2C)
 {
   bme68x_I2CAddr = I2CAddr_;
+  _bme68x_wire = wire;
 }
 
 void DFRobot_BME68x_I2C::setConvertAndUpdate()
