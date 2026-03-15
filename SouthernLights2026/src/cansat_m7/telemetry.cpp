@@ -94,6 +94,7 @@ bool telemetryInit(SensorPacket& g_packet) {
     if (lora.begin(EU868)) {
         // Switch from LoRaWAN mode to raw P2P test mode
         // AT+TCONF sets: 868 MHz | 14 dBm | BW125 | SF7 | CR4/5 | LNA off | PABoost off
+        //TODO: Verify SF7 vs SF9 for range vs data rate tradeoff in real conditions.
         SerialLoRa.print("AT+TOFF\r");          delay(500);
         SerialLoRa.print("AT+TCONF=868:14:125:9:4/5:0:0\r"); delay(500);
         g_lora_ok = true;
