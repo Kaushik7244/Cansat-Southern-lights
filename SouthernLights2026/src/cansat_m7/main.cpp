@@ -28,6 +28,12 @@
 // Must be OFF for flight builds — Serial.print() wastes CPU with no USB listener.
 #define SLDEBUG
 
+// Uncomment to strip all peripherals except Portenta H7 + Nicla Sense ME.
+// Disables WiFi, SD, telemetry, GPS, and M4 (M4 idles after RPC.begin()).
+// Use when physically disconnecting APC220, BME688, and Vision Shield.
+// NOTE: Nicla communicates via BLE in all modes — ESLOV I2C is no longer used.
+//#define ISOLATION_TEST
+
 // ---------------------------------------------------------------------------
 // LED polarity — Portenta: LOW = on
 // ---------------------------------------------------------------------------
@@ -142,31 +148,6 @@ void setup()
     while (!Serial) ;
     Serial.println("USB Serial up at 115200");
 
-    // Early I2C scan (diagnostic — remove before flight build).
-    // Wire  (I2C3, PH_7/PH_8)  = Qwiic → BME688 0x77
-    // Wire1 (I2C1, PB_6/PB_7)  = internal + ESLOV → PMIC 0x08, fuel gauge 0x36, Nicla 0x08
-    // Wire2 (I2C4, PH_11/PH_12) = high-density connector only — nothing here
-    Wire.begin();  Wire.setClock(100000);
-    Wire1.begin(); Wire1.setClock(100000);
-    delay(2000);   // give Nicla time to boot
-
-    {
-        auto i2cScan = [](TwoWire &bus, const char *label) {
-            Serial.print(label);
-            bool found = false;
-            for (uint8_t addr = 1; addr < 127; addr++) {
-                bus.beginTransmission(addr);
-                if (bus.endTransmission() == 0) {
-                    Serial.print("0x"); Serial.print(addr, HEX); Serial.print(" ");
-                    found = true;
-                }
-            }
-            Serial.println(found ? "" : "nothing found");
-        };
-        i2cScan(Wire,  "Early Wire  scan: ");
-        i2cScan(Wire1, "Early Wire1 scan: ");
-    }
-
     // RPC must start before WiFi so M4 can begin sending sensor data
     Serial.print("RPC init...");
     RPC.begin();
@@ -178,6 +159,7 @@ void setup()
     digitalWrite(LEDR, OFF);
     digitalWrite(LEDB, ON);   // blue = network/NTP in progress
 
+#ifndef ISOLATION_TEST
     if (WIFI_ENABLED) {
         Serial.println("WiFi init...");
         if (WiFi.status() == WL_NO_SHIELD) {
@@ -235,14 +217,16 @@ void setup()
         Serial.println("WARNING — no radio available");
     }
 
-    // GPS + Nicla Sense + servos — after WiFi to avoid I2C/PMIC conflict
+    // GPS
     gpsInit();
-    navigationSetup();
+#endif  // ISOLATION_TEST
 
-    Serial.print("ESLOV INT pin 7 post-init = "); Serial.println(digitalRead(7));
+    // Nicla Sense + servos
+    navigationSetup();
 
     g_packet.state = STATE_PAD;
 
+#ifndef ISOLATION_TEST
     // Prime Wire (I2C3) for M4's BME688 access.
     // EslovHandler now uses Wire1 (I2C1) for Nicla, so Wire is not touched by
     // Nicla init. M7 must prime Wire before releasing M4 regardless of Nicla state.
@@ -263,12 +247,23 @@ void setup()
 
     Serial.println("Signaling M4 Core to start sensor operations");
     RPC.call("M7Ready"); // release M4 to start I2C / BME688 init
+#else
+    Serial.println("ISOLATION_TEST: M4 kept idle, Wire priming skipped");
+#endif
 
     digitalWrite(LEDR, OFF);
     digitalWrite(LEDG, ON);   // green = ready
     digitalWrite(LEDB, OFF);
 
 
+
+#ifdef SLDEBUG
+    // RF link verification — sends plain ASCII so PuTTY can confirm data arrives.
+    // If "APC220 TEST" appears on COM14, the radio link is good.
+    // Remove before flight build (SLDEBUG must be off).
+    Serial1.println("APC220 TEST");
+    Serial.println("APC220 TEST sent on Serial1");
+#endif
 
     Serial.println("Setup complete — entering loop");
     
@@ -282,6 +277,7 @@ void loop()
 {
     uint32_t now_ms = millis();
 
+#ifndef ISOLATION_TEST
     // Forward M4 RPC.print() output to USB Serial
     while (RPC.available()) Serial.write(RPC.read());
 
@@ -305,16 +301,19 @@ void loop()
             RPC.call("DumpM4Log");
         }
     }
+#endif  // ISOLATION_TEST
 
-    // Nicla Sense — rate-limited to 5 Hz to avoid flooding the shared I2C bus and
-    // blocking M4's BME688 reads. 200 ms is sufficient for navigation updates.
+    // Nicla Sense — poll BLE at 5 Hz. Sensor data arrives at 10 Hz via BLE notifications;
+    // 200 ms polling interval is sufficient for navigation updates.
     if (nicla_active && now_ms - g_last_nicla_ms >= NICLA_INTERVAL_MS) {
         niclaUpdate();
         g_last_nicla_ms = now_ms;
     }
 
+#ifndef ISOLATION_TEST
     // GPS — non-blocking poll; fills g_packet.secondary when fix is valid
     gpsPoll(g_packet);
+#endif
 
     // Navigation — flight state machine and servo control
     navigationUpdate();
@@ -328,7 +327,9 @@ void loop()
         g_ring[g_ring_head % RING_SIZE] = g_packet;
         g_ring_head++;
 
+#ifndef ISOLATION_TEST
         telemetrySend(g_packet, g_packet);
+#endif
         g_last_tx_ms = now_ms;
         mainCoreLoop++;
 
@@ -337,11 +338,13 @@ void loop()
 #endif
     }
 
+#ifndef ISOLATION_TEST
     // Drain SD ring buffer
     if (now_ms - g_last_drain_ms >= DRAIN_INTERVAL_MS) {
         storageDrain(g_packet);
         g_last_drain_ms = now_ms;
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -350,39 +353,26 @@ void loop()
 
 void navigationSetup()
 {
-    Serial.print("Nicla Sense (BHY2Host) init... ");
-    {
-        // BHY2Host.begin() blocks forever on the ESLOV INT pin if Nicla is absent/asleep.
-        // Pre-check pin 7 (INPUT_PULLDOWN so floating = LOW = absent).
-        // Retry once — WiFi delay (~20 s) can put the BHI260 into sleep; a second attempt
-        // after Wire activity often wakes it.
-        pinMode(7, INPUT_PULLDOWN);
-        Serial.print("ESLOV INT pin 7 = "); Serial.println(digitalRead(7));
-        for (int attempt = 0; attempt < 2 && !nicla_active; attempt++) {
-            if (attempt > 0) { Serial.print("retry... "); delay(2000); }
-            if (BHY2Host.begin()) {
-                BHY2Host.debug(Serial);
-                Serial.print("DBG baro.begin... ");
-                nicla_barometer.begin(10, 0);
-                Serial.println("done");
-                Serial.print("DBG temp.begin... ");
-                nicla_temp.begin(10, 0);
-                Serial.println("done");
-                Serial.print("DBG ori.begin... ");
-                nicla_ori.begin(10, 0);
-                Serial.println("done");
-                // Allow Nicla 2 s to start sending data before loop begins
-                Serial.print(" waiting for data... ");
-                unsigned long t0 = millis();
-                while (nicla_temp.value() == 0.0f && millis() - t0 < 2000) {
-                    BHY2Host.update();
-                    delay(50);
-                }
-                Serial.print(nicla_temp.value() != 0.0f ? "data OK" : "no data yet");
-                nicla_active = true;
-            }
+    // BHY2Host connects to the Nicla Sense ME over BLE.
+    // The Nicla must be running cansat_nicla firmware (NICLA_STANDALONE mode),
+    // advertising as "NICLA". begin() blocks until the device is found — power
+    // the Nicla before the Portenta reaches this point.
+    Serial.print("Nicla Sense (BLE) connecting... ");
+    if (BHY2Host.begin(false, NICLA_VIA_BLE)) {
+        nicla_barometer.begin(10, 0);
+        nicla_temp.begin(10, 0);
+        nicla_ori.begin(10, 0);
+        // Wait up to 5 s for first data to arrive over BLE
+        Serial.print("waiting for data... ");
+        unsigned long t0 = millis();
+        while (nicla_temp.value() == 0.0f && millis() - t0 < 5000) {
+            BHY2Host.update();
+            delay(50);
         }
-        Serial.println(nicla_active ? "OK" : "FAILED — no Nicla data this flight");
+        nicla_active = (nicla_temp.value() != 0.0f);
+        Serial.println(nicla_active ? "OK" : "connected but no data yet — continuing");
+    } else {
+        Serial.println("FAILED — Nicla not found over BLE");
     }
 
     // Servos start with brakes open (awaiting parachute deployment trigger)
@@ -396,24 +386,24 @@ void navigationSetup()
 
 void niclaUpdate()
 {
-    // update() internally calls availableSensorData() and reads all queued packets
-    // in one call — do not call availableSensorData() separately, that double-polls
-    // the Nicla over I2C and consumes the count before update() can act on it.
-    uint8_t avail = BHY2Host.availableSensorData();
-    static uint8_t avail_dbg = 0;
-    if (avail_dbg < 10) {
-        Serial.print("DBG avail="); Serial.println(avail);
-        avail_dbg++;
-    }
+    // update() calls BLE.poll() which processes any pending BLE notifications
+    // from the Nicla. Sensor values are updated by the notification callbacks —
+    // read .value() immediately after.
     BHY2Host.update();
 
     // Always read latest values — returns 0.0 until Nicla sends its first packet.
-    g_packet.primary.temperature2 = nicla_temp.value();
-    g_packet.primary.pressure2    = nicla_barometer.value();
+    float t2 = nicla_temp.value();
+    float p2 = nicla_barometer.value() / 100.0f;  // Pa → hPa
+
+    // Outlier rejection — same bounds as BME688. A single corrupt BLE packet
+    // can produce physically impossible values that would falsely trigger the
+    // flight state machine (ascent/apogee/parachute deploy).
+    if (t2 >= -50.0f && t2 <= 85.0f)   g_packet.primary.temperature2 = t2;
+    if (p2 >= 300.0f  && p2 <= 1100.0f) g_packet.primary.pressure2    = p2;
 
 #ifdef SLDEBUG
     static uint8_t nicla_dbg_count = 0;
-    if (nicla_dbg_count < 20) {
+    if (nicla_dbg_count < 3) {
         char buf[60];
         snprintf(buf, sizeof(buf), "Nicla: T2=%.2f P2=%.2f w=%.2f\r\n",
                  g_packet.primary.temperature2, g_packet.primary.pressure2, nicla_ori.w());

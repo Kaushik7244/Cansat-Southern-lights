@@ -2,7 +2,11 @@
 #include <Wire.h>
 #include <DFRobot_BME68x.h>
 
-#define SLDEBUG
+//#define SLDEBUG
+
+// Uncomment to match M7 isolation test mode — M4 idles after RPC.begin().
+// BME688 is disconnected; attempting bme.begin() would hang forever.
+//#define ISOLATION_TEST
 
 // ----- Southern lights ---------
 // THIS IS THE SECONDARY CORE (M4) LOGIC
@@ -92,6 +96,12 @@ static void onM7Ready() { m7_ready = true; }
 void setup()
 {
     RPC.begin();
+#ifdef ISOLATION_TEST
+    // M7 never calls "M7Ready" in isolation mode — idle here to keep M4 silent.
+    // RPC.begin() must run first so the inter-core link is established.
+    while (true) delay(1000);
+#endif
+
     RPC.bind("DumpM4Log", dumpLog);
     RPC.bind("M7Ready",   onM7Ready);
     RPC.call("setH4CoreLoop", localLoop++);

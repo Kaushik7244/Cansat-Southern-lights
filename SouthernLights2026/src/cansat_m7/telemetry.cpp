@@ -12,6 +12,21 @@
 
 #include "telemetry.h"
 #include <MKRWAN.h>
+#include <Arduino.h>
+
+// Read one line from SerialLoRa within timeout_ms (strips \r).
+static String loraReadLine(uint16_t timeout_ms = 600) {
+    unsigned long t0 = millis();
+    String s;
+    while (millis() - t0 < timeout_ms) {
+        while (SerialLoRa.available()) {
+            char c = SerialLoRa.read();
+            if (c == '\n') return s;
+            if (c != '\r') s += c;
+        }
+    }
+    return s;   // timeout — return whatever arrived
+}
 
 // ---------------------------------------------------------------------------
 // Radio objects
@@ -89,18 +104,16 @@ bool telemetryInit(SensorPacket& g_packet) {
     g_apc_ok = true;
     g_packet.m7_errors += 0;   // APC220 has no init handshake to verify
 
-    // LoRa — Vision Shield Murata module via MKRWAN AT commands
-    // Requires MKRWAN.h patched with SERIAL_8E1 for Portenta (see notes)
+    // LoRa — Vision Shield Murata module.
+    // AT+TTONE/TTX/UTX all return no response — TX blocked on this firmware.
+    // Disabled until dumb-mode RadioLib approach is implemented.
+    // lora.begin() is still called to confirm UART is alive.
     if (lora.begin(EU868)) {
-        // Switch from LoRaWAN mode to raw P2P test mode
-        // AT+TCONF sets: 868 MHz | 14 dBm | BW125 | SF7 | CR4/5 | LNA off | PABoost off
-        //TODO: Verify SF7 vs SF9 for range vs data rate tradeoff in real conditions.
-        SerialLoRa.print("AT+TOFF\r");          delay(500);
-        SerialLoRa.print("AT+TCONF=868:14:125:9:4/5:0:0\r"); delay(500);
-        g_lora_ok = true;
+        Serial.println("[LoRa] modem responding but TX disabled (AT+TX unsupported)");
+        g_lora_ok = false;   // force disabled — don't waste loop time on dead TX
     } else {
+        Serial.println("[LoRa] modem not found");
         g_lora_ok = false;
-        g_packet.m7_errors++;
     }
 
     return g_apc_ok || g_lora_ok;
@@ -125,22 +138,11 @@ void telemetrySend(const SensorPacket& pkt, SensorPacket& g_packet) {
         // Flush any pending RX data before sending
         while (SerialLoRa.available()) SerialLoRa.read();
 
-        SerialLoRa.print("AT+UTX=");
-        SerialLoRa.print((int)frame_len);
-        SerialLoRa.print("\r");
-        delay(50);   // brief pause for modem to switch to receive-payload state
-
-        size_t written = SerialLoRa.write(frame, frame_len);
-        if (written != frame_len) {
-            g_packet.m7_errors++;
-        }
-
-        // Wait briefly for +OK or +ERR from modem (non-blocking with timeout)
-        unsigned long t = millis();
-        while (millis() - t < 500) {
-            if (SerialLoRa.available()) break;
-        }
-        // Drain response — we log errors via m7_errors, not by parsing the response
-        while (SerialLoRa.available()) SerialLoRa.read();
+        // AT+TTX=1 transmits one test packet using the AT+TCONF RF parameters.
+        // Payload is a fixed counter pattern (not our frame), but this verifies
+        // the RF path is alive. Ground station will report a CRC error — that's expected.
+        // TODO: replace with proper dumb-mode RadioLib TX once RF path is confirmed.
+        // LoRa TX disabled — Vision Shield AT commands don't support raw P2P TX.
+        // TODO: implement dumb-mode RadioLib TX (SPI bypass of Murata STM32L0).
     }
 }
