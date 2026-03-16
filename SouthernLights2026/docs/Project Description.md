@@ -46,6 +46,12 @@ BHI260AP for movement
 ## Microcontroller
 Arduino Portenta H7
 
+# H7 pinout
+Port	TX	 RX	    Used for
+Serial1	PA9	 PA10	APC220
+Serial2	PA15 PF6	GPS Air530 (tomorrow)
+Serial3	PJ8	 PJ9	SerialLoRa → Vision Shield
+
 ## Sensors
 Nicla Sense
 BHI260AP motion
