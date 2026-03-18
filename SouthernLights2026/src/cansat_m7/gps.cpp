@@ -40,6 +40,10 @@ bool gpsPoll(SensorPacket& pkt) {
     // Update fix status
     g_has_fix = gps.location.isValid() && gps.location.age() < 2000;
 
+    // Always update satellite count — visible even before a full fix
+    if (gps.satellites.isValid())
+        pkt.secondary.gps_satellites = (uint8_t)gps.satellites.value();
+
     if (g_has_fix) {
         // Populate Tier 2 secondary data
         pkt.secondary.latitude       = (float)gps.location.lat();
@@ -47,7 +51,6 @@ bool gpsPoll(SensorPacket& pkt) {
         pkt.secondary.altitude_gps   = (float)gps.altitude.meters();
         pkt.secondary.speed_ms       = (float)gps.speed.mps();
         pkt.secondary.heading        = (float)gps.course.deg();
-        pkt.secondary.gps_satellites = (uint8_t)gps.satellites.value();
         pkt.secondary.gps_fix        = true;
 
         // Time sync — runs once on first valid fix with UTC time
@@ -82,4 +85,29 @@ bool gpsPoll(SensorPacket& pkt) {
 
 bool gpsHasFix() {
     return g_has_fix;
+}
+
+void gpsDebugStatus() {
+    uint32_t sats = gps.satellites.isValid() ? gps.satellites.value() : 0;
+    char buf[128];
+    if (gps.hdop.isValid()) {
+        float hdop = (float)gps.hdop.value() / 100.0f;
+        snprintf(buf, sizeof(buf),
+            "GPS | chars:%lu sents:%lu bad_crc:%lu sats:%lu hdop:%.1f | %s",
+            (unsigned long)gps.charsProcessed(),
+            (unsigned long)gps.sentencesWithFix(),
+            (unsigned long)gps.failedChecksum(),
+            (unsigned long)sats,
+            hdop,
+            g_has_fix ? "FIX" : "searching...");
+    } else {
+        snprintf(buf, sizeof(buf),
+            "GPS | chars:%lu sents:%lu bad_crc:%lu sats:%lu hdop:-- | %s",
+            (unsigned long)gps.charsProcessed(),
+            (unsigned long)gps.sentencesWithFix(),
+            (unsigned long)gps.failedChecksum(),
+            (unsigned long)sats,
+            g_has_fix ? "FIX" : "searching...");
+    }
+    Serial.println(buf);
 }
