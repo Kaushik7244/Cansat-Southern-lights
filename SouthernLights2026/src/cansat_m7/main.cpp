@@ -53,10 +53,12 @@ int  WiFistatus = WL_IDLE_STATUS;
 // ---------------------------------------------------------------------------
 // Navigation — hardware
 // ---------------------------------------------------------------------------
-static const int SERVO_PIN_LEFT  = 4;
-static const int SERVO_PIN_RIGHT = 5;
-static const int SERVO_NEUTRAL   = 90;
-static const int SERVO_MAX_PULL  = 40;
+#define SERVO_PIN_LEFT  PH_15
+#define SERVO_PIN_RIGHT PK_1
+#define LEFT_NEUTRAL 180 
+#define RIGHT_NEUTRAL 0
+#define SERVO_FOLDED 90
+#define SERVO_MAX_PULL 90
 static const float TURNING_RATE  = 0.8f;
 
 Servo break_left;
@@ -146,6 +148,7 @@ void setup()
     digitalWrite(LEDR, ON);   // red = booting
     digitalWrite(LEDG, OFF);
     digitalWrite(LEDB, OFF);
+   
 
     Serial.begin(115200);
     while (!Serial) ;
@@ -395,8 +398,8 @@ void navigationSetup()
     Serial.print("Servos init... ");
     break_left.attach(SERVO_PIN_LEFT);
     break_right.attach(SERVO_PIN_RIGHT);
-    break_left.write(180);
-    break_right.write(0);
+    break_left.write(SERVO_FOLDED);
+    break_right.write(SERVO_FOLDED);
     Serial.println("OK");
 }
 
@@ -469,8 +472,8 @@ void navigationUpdate()
     if (crossed_500 && !parachute_deployed && nicla_altitude < 60.0f) {
         parachute_deployed = true;
         g_packet.state     = STATE_DESCENT;
-        break_left.write(SERVO_NEUTRAL);
-        break_right.write(SERVO_NEUTRAL);
+        break_left.write(LEFT_NEUTRAL);
+        break_right.write(RIGHT_NEUTRAL);
         Serial.println("NAV: parachute deployed — servos to neutral");
     }
 
@@ -488,15 +491,23 @@ void navigationUpdate()
                 Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
             }
 
-            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
-            target_heading = constrain(target_heading, -100.0f, 100.0f) * TURNING_RATE;
+            int leftServo  = LEFT_NEUTRAL;
+            int rightServo = RIGHT_NEUTRAL;
 
-            int leftServo  = SERVO_NEUTRAL;
-            int rightServo = SERVO_NEUTRAL;
-            if (target_heading > 0)
-                rightServo = SERVO_NEUTRAL - map((int)target_heading,       0, 100, 0, SERVO_MAX_PULL);
-            if (target_heading < 0)
-                leftServo  = SERVO_NEUTRAL - map((int)abs(target_heading),  0, 100, 0, SERVO_MAX_PULL);
+            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
+            target_heading = target_heading * TURNING_RATE;
+            target_heading = constrain(target_heading, -100.0f, 100.0f);
+
+            // Convert heading magnitude to brake amount (0 → 90 degrees)
+            int brake = map(abs(target_heading), 0, 100, 0, 90);
+
+            if (target_heading > 0) {
+                rightServo = RIGHT_NEUTRAL + brake;   
+            }
+
+            if (target_heading < 0) {
+                leftServo = LEFT_NEUTRAL - brake;   
+            }
 
             break_left.write(leftServo);
             break_right.write(rightServo);
