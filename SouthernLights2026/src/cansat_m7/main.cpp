@@ -54,9 +54,9 @@ int  WiFistatus = WL_IDLE_STATUS;
 // ---------------------------------------------------------------------------
 #define SERVO_PIN_LEFT  PH_15
 #define SERVO_PIN_RIGHT PK_1
-#define LEFT_NEUTRAL   180
-#define RIGHT_NEUTRAL  0
-#define SERVO_FOLDED     90
+#define LEFT_NEUTRAL 180 
+#define RIGHT_NEUTRAL 0
+#define SERVO_FOLDED 90
 #define SERVO_MAX_PULL 90
 static const float TURNING_RATE  = 0.8f;
 
