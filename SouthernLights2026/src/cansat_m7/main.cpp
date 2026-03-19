@@ -44,7 +44,7 @@ const int OFF = HIGH;
 // ---------------------------------------------------------------------------
 // WiFi
 // ---------------------------------------------------------------------------
-const bool WIFI_ENABLED = true;
+const bool WIFI_ENABLED = false;
 char ssid[]     = SECRET_SSID;
 char pass[]     = SECRET_PASS;
 long WiFirssi   = -1;
@@ -59,6 +59,7 @@ int  WiFistatus = WL_IDLE_STATUS;
 #define RIGHT_NEUTRAL 0
 #define SERVO_FOLDED 90
 #define SERVO_MAX_PULL 90
+#define altitude_sim true
 static const float TURNING_RATE  = 0.8f;
 
 Servo break_left;
@@ -452,8 +453,10 @@ void niclaUpdate()
     }
 }
 
+
 void navigationUpdate()
 {
+    
     if (!alt_init) return;   // altitude reference not yet set — nothing to do
 
     // Ascent detection
