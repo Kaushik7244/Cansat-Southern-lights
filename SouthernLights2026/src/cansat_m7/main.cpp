@@ -18,6 +18,7 @@
 #include "data_types.h"
 #include "storage.h"
 #include "telemetry.h"
+#include "hw_config.h"
 #include "gps.h"
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
@@ -52,10 +53,12 @@ int  WiFistatus = WL_IDLE_STATUS;
 // ---------------------------------------------------------------------------
 // Navigation — hardware
 // ---------------------------------------------------------------------------
-static const int SERVO_PIN_LEFT  = 4;
-static const int SERVO_PIN_RIGHT = 5;
-static const int SERVO_NEUTRAL   = 90;
-static const int SERVO_MAX_PULL  = 40;
+#define SERVO_PIN_LEFT  PH_15
+#define SERVO_PIN_RIGHT PK_1
+#define LEFT_NEUTRAL 180 
+#define RIGHT_NEUTRAL 0
+#define SERVO_FOLDED 90
+#define SERVO_MAX_PULL 90
 static const float TURNING_RATE  = 0.8f;
 
 Servo break_left;
@@ -110,12 +113,14 @@ uint8_t          g_ring_tail = 0;
 // ---------------------------------------------------------------------------
 // Loop timing
 // ---------------------------------------------------------------------------
-static uint32_t g_last_tx_ms    = 0;
-static uint32_t g_last_drain_ms = 0;
-static uint32_t g_last_nicla_ms = 0;
-static const uint32_t TX_INTERVAL_MS    = 1000;   // transmit every 1 s
-static const uint32_t DRAIN_INTERVAL_MS = 10000;  // flush SD every 10 s
-static const uint32_t NICLA_INTERVAL_MS = 200;    // poll Nicla at 5 Hz — limits I2C bus usage
+static uint32_t g_last_tx_ms         = 0;
+static uint32_t g_last_drain_ms      = 0;
+static uint32_t g_last_nicla_ms      = 0;
+static uint32_t g_last_gps_status_ms = 0;
+static const uint32_t TX_INTERVAL_MS         = 1000;   // transmit every 1 s
+static const uint32_t DRAIN_INTERVAL_MS      = 10000;  // flush SD every 10 s
+static const uint32_t NICLA_INTERVAL_MS      = 200;    // poll Nicla at 5 Hz — limits I2C bus usage
+static const uint32_t GPS_STATUS_INTERVAL_MS = 5000;   // GPS acquisition status every 5 s
 
 // ---------------------------------------------------------------------------
 // Forward declarations
@@ -143,6 +148,7 @@ void setup()
     digitalWrite(LEDR, ON);   // red = booting
     digitalWrite(LEDG, OFF);
     digitalWrite(LEDB, OFF);
+   
 
     Serial.begin(115200);
     while (!Serial) ;
@@ -208,6 +214,8 @@ void setup()
 
     // Radios — APC220 UART + LoRa Vision Shield
     Serial.print("Telemetry init... ");
+    Serial.println("skip");
+    /*
     if (telemetryInit(g_packet)) {
         Serial.print("OK");
         if (telemetryLoRaAvailable()) Serial.print(" (APC220 + LoRa)");
@@ -216,6 +224,7 @@ void setup()
     } else {
         Serial.println("WARNING — no radio available");
     }
+    */
 
     // GPS
     gpsInit();
@@ -257,12 +266,12 @@ void setup()
 
 
 
-#ifdef SLDEBUG
+#if defined(SLDEBUG) && defined(APC_ENABLED)
     // RF link verification — sends plain ASCII so PuTTY can confirm data arrives.
     // If "APC220 TEST" appears on COM14, the radio link is good.
     // Remove before flight build (SLDEBUG must be off).
-    Serial1.println("APC220 TEST");
-    Serial.println("APC220 TEST sent on Serial1");
+    APC_SERIAL.println("APC220 TEST");
+    Serial.println("APC220 TEST sent on APC_SERIAL");
 #endif
 
     Serial.println("Setup complete — entering loop");
@@ -284,8 +293,9 @@ void loop()
     // APC220 time sync command from ground station.
     // Ground operator sends: TIME:<unix_epoch>   e.g. TIME:1742123456
     // python -c "import time,serial; s=serial.Serial('COM1',9600); s.write(b'TIME:'+str(int(time.time())).encode()+b'\n'); s.close()"
-    if (Serial1.available()) {
-        String cmd = Serial1.readStringUntil('\n');
+#ifdef APC_ENABLED
+    if (APC_SERIAL.available()) {
+        String cmd = APC_SERIAL.readStringUntil('\n');
         cmd.trim();
         if (cmd.startsWith("TIME:") && storageGetBootEpoch() == 0) {
             uint32_t epoch = (uint32_t)cmd.substring(5).toInt();
@@ -301,6 +311,7 @@ void loop()
             RPC.call("DumpM4Log");
         }
     }
+#endif  // APC_ENABLED
 #endif  // ISOLATION_TEST
 
     // Nicla Sense — poll BLE at 5 Hz. Sensor data arrives at 10 Hz via BLE notifications;
@@ -313,6 +324,14 @@ void loop()
 #ifndef ISOLATION_TEST
     // GPS — non-blocking poll; fills g_packet.secondary when fix is valid
     gpsPoll(g_packet);
+
+#ifdef SLDEBUG
+    // Periodic acquisition status — stops once fix is acquired
+    if (!gpsHasFix() && now_ms - g_last_gps_status_ms >= GPS_STATUS_INTERVAL_MS) {
+        gpsDebugStatus();
+        g_last_gps_status_ms = now_ms;
+    }
+#endif
 #endif
 
     // Navigation — flight state machine and servo control
@@ -379,8 +398,8 @@ void navigationSetup()
     Serial.print("Servos init... ");
     break_left.attach(SERVO_PIN_LEFT);
     break_right.attach(SERVO_PIN_RIGHT);
-    break_left.write(180);
-    break_right.write(0);
+    break_left.write(SERVO_FOLDED);
+    break_right.write(SERVO_FOLDED);
     Serial.println("OK");
 }
 
@@ -453,8 +472,8 @@ void navigationUpdate()
     if (crossed_500 && !parachute_deployed && nicla_altitude < 60.0f) {
         parachute_deployed = true;
         g_packet.state     = STATE_DESCENT;
-        break_left.write(SERVO_NEUTRAL);
-        break_right.write(SERVO_NEUTRAL);
+        break_left.write(LEFT_NEUTRAL);
+        break_right.write(RIGHT_NEUTRAL);
         Serial.println("NAV: parachute deployed — servos to neutral");
     }
 
@@ -472,15 +491,23 @@ void navigationUpdate()
                 Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
             }
 
-            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
-            target_heading = constrain(target_heading, -100.0f, 100.0f) * TURNING_RATE;
+            int leftServo  = LEFT_NEUTRAL;
+            int rightServo = RIGHT_NEUTRAL;
 
-            int leftServo  = SERVO_NEUTRAL;
-            int rightServo = SERVO_NEUTRAL;
-            if (target_heading > 0)
-                rightServo = SERVO_NEUTRAL - map((int)target_heading,       0, 100, 0, SERVO_MAX_PULL);
-            if (target_heading < 0)
-                leftServo  = SERVO_NEUTRAL - map((int)abs(target_heading),  0, 100, 0, SERVO_MAX_PULL);
+            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
+            target_heading = target_heading * TURNING_RATE;
+            target_heading = constrain(target_heading, -100.0f, 100.0f);
+
+            // Convert heading magnitude to brake amount (0 → 90 degrees)
+            int brake = map(abs(target_heading), 0, 100, 0, 90);
+
+            if (target_heading > 0) {
+                rightServo = RIGHT_NEUTRAL + brake;   
+            }
+
+            if (target_heading < 0) {
+                leftServo = LEFT_NEUTRAL - brake;   
+            }
 
             break_left.write(leftServo);
             break_right.write(rightServo);
@@ -579,8 +606,11 @@ void printPacketToSerial()
         Serial.print(g_packet.secondary.latitude, 5);
         Serial.print(",");
         Serial.print(g_packet.secondary.longitude, 5);
+        Serial.print("  sats:");
+        Serial.print(g_packet.secondary.gps_satellites);
     } else {
-        Serial.print("  GPS:no-fix");
+        Serial.print("  GPS:no-fix sats:");
+        Serial.print(g_packet.secondary.gps_satellites);
     }
     Serial.println();
 }

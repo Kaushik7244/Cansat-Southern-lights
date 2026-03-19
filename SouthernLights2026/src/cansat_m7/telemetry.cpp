@@ -11,6 +11,7 @@
  */
 
 #include "telemetry.h"
+#include "hw_config.h"
 #include <MKRWAN.h>
 #include <Arduino.h>
 
@@ -98,11 +99,14 @@ static size_t buildFrame(const SensorPacket& pkt, uint8_t* buf) {
 
 bool telemetryInit(SensorPacket& g_packet) {
 
-    // APC220 — UART1, D14 TX / D13 RX
-    // Modules C+D pre-configured to 433.920 MHz, 9600 bps (see apc220_rf7020_status.md)
-    Serial1.begin(9600);
+    // APC220 — port and baud set in hw_config.h
+#ifdef APC_ENABLED
+    APC_SERIAL.begin(APC_BAUD);
     g_apc_ok = true;
     g_packet.m7_errors += 0;   // APC220 has no init handshake to verify
+#else
+    Serial.println("[APC220] disabled via hw_config.h (APC_ENABLED not set)");
+#endif
 
     // LoRa — Vision Shield Murata module.
     // AT+TTONE/TTX/UTX all return no response — TX blocked on this firmware.
@@ -124,13 +128,15 @@ void telemetrySend(const SensorPacket& pkt, SensorPacket& g_packet) {
     uint8_t frame[sizeof(TxPacket) + 5];
     size_t  frame_len = buildFrame(pkt, frame);
 
-    // APC220 — write raw bytes to UART1, radio handles RF transparently
+    // APC220 — write raw bytes, radio handles RF transparently
+#ifdef APC_ENABLED
     if (g_apc_ok) {
-        size_t written = Serial1.write(frame, frame_len);
+        size_t written = APC_SERIAL.write(frame, frame_len);
         if (written != frame_len) {
             g_packet.m7_errors++;
         }
     }
+#endif
 
     // LoRa — AT+UTX sends a raw payload over the air without LoRaWAN overhead
     // Format: AT+UTX=<len>\r then write <len> raw bytes

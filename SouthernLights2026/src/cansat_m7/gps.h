@@ -11,16 +11,12 @@
  * Time sync: on the first valid fix that includes UTC time, gpsPoll() calls
  * storageSetBootEpoch() automatically. No manual action needed.
  *
- * GPS serial port: Serial2 — change GPS_SERIAL below if wired differently.
+ * GPS serial port: defined by GPS_SERIAL in hw_config.h — change it there.
  */
 
 #pragma once
 #include "data_types.h"
-
-// Serial port the Grove Air530 is connected to.
-// Change this if GPS is wired to a different UART.
-#define GPS_SERIAL Serial2
-#define GPS_BAUD   9600
+#include "hw_config.h"   // GPS_SERIAL, GPS_BAUD — change port assignments there
 
 /**
  * Initialise GPS serial port. Call once in setup().
@@ -38,3 +34,10 @@ bool gpsPoll(SensorPacket& pkt);
  * Returns true if GPS has a valid fix.
  */
 bool gpsHasFix();
+
+/**
+ * Print a one-line acquisition status to Serial:
+ *   chars received, sentences with fix, bad checksums, satellites in view, HDOP, fix state.
+ * Call periodically (e.g. every 5 s) while waiting for a fix.
+ */
+void gpsDebugStatus();
