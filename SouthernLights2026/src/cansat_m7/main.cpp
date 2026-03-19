@@ -55,10 +55,8 @@ int  WiFistatus = WL_IDLE_STATUS;
 // ---------------------------------------------------------------------------
 #define SERVO_PIN_LEFT  PH_15
 #define SERVO_PIN_RIGHT PK_1
-#define LEFT_NEUTRAL 180 
-#define RIGHT_NEUTRAL 0
-#define SERVO_FOLDED 90
-#define SERVO_MAX_PULL 90
+#define LEFT_NEUTRAL 90 
+#define RIGHT_NEUTRAL 90
 #define altitude_sim true
 static const float TURNING_RATE  = 0.8f;
 
@@ -68,7 +66,7 @@ Servo break_right;
 // Nicla Sense ME sensors via BHY2Host
 Sensor          nicla_barometer(SENSOR_ID_BARO);
 Sensor          nicla_temp(SENSOR_ID_TEMP);
-SensorQuaternion nicla_ori(SENSOR_ID_ORI);
+SensorQuaternion nicla_ori(SENSOR_ID_GEORV);  // Geo-magnetic rotation vector (accel + gyro + magnetometer fusion)
 
 // ---------------------------------------------------------------------------
 // Navigation — state
@@ -84,7 +82,7 @@ static const Checkpoint arr[100] = {
     // remaining entries zero-initialised — treated as end-of-list
 };
 
-Go_to_checkpoint Target(arr[0].x, arr[0].y);
+Go_to_checkpoint Target(arr[0].y, arr[0].x);
 int              checkpoints_counter = 0;
 
 Altitude alt;
@@ -92,8 +90,6 @@ float    nicla_altitude = 0.0f;
 float    yaw_deg        = 0.0f;
 bool     nicla_active   = false;   // set true only when BHY2Host init succeeded
 bool     alt_init       = false;
-bool     crossed_500    = false;
-bool     parachute_deployed = false;
 bool     flight_end     = false;
 
 // ---------------------------------------------------------------------------
@@ -371,6 +367,23 @@ void loop()
 // Navigation
 // ---------------------------------------------------------------------------
 
+// Simulate altitude: cycles 0 → 1000 → 0 continuously (30 s full cycle)
+float getSimulatedAltitude()
+{
+    static unsigned long start_time = millis();
+    unsigned long elapsed = millis() - start_time;
+    unsigned long cycle_period = 30000;  // 30 s total (15 s up, 15 s down)
+    unsigned long cycle_pos = elapsed % cycle_period;
+    
+    if (cycle_pos < 15000) {
+        // Ascent phase: 0 → 1000 m over 15 s
+        return (cycle_pos / 15000.0f) * 1000.0f;
+    } else {
+        // Descent phase: 1000 → 0 m over 15 s
+        return (1.0f - (cycle_pos - 15000) / 15000.0f) * 1000.0f;
+    }
+}
+
 void navigationSetup()
 {
     // BHY2Host connects to the Nicla Sense ME over BLE.
@@ -395,12 +408,12 @@ void navigationSetup()
         Serial.println("FAILED — Nicla not found over BLE");
     }
 
-    // Servos start with brakes open (awaiting parachute deployment trigger)
+    // Servos init at neutral position
     Serial.print("Servos init... ");
     break_left.attach(SERVO_PIN_LEFT);
     break_right.attach(SERVO_PIN_RIGHT);
-    break_left.write(SERVO_FOLDED);
-    break_right.write(SERVO_FOLDED);
+    break_left.write(LEFT_NEUTRAL);
+    break_right.write(RIGHT_NEUTRAL);
     Serial.println("OK");
 }
 
@@ -449,7 +462,11 @@ void niclaUpdate()
     }
 
     if (alt_init) {
-        nicla_altitude = alt.get_alt(g_packet.primary.temperature2, g_packet.primary.pressure2);
+        if (altitude_sim) {
+            nicla_altitude = getSimulatedAltitude();
+        } else {
+            nicla_altitude = alt.get_alt(g_packet.primary.temperature2, g_packet.primary.pressure2);
+        }
     }
 }
 
@@ -465,23 +482,14 @@ void navigationUpdate()
         Serial.println("NAV: ascent detected");
     }
 
-    // Apogee / parachute deploy
-    if (!crossed_500 && nicla_altitude > 480.0f) {
-        crossed_500    = true;
-        g_packet.state = STATE_APOGEE;
-        Serial.println("NAV: apogee threshold crossed");
+    // Descent phase transition
+    if (g_packet.state == STATE_ASCENT && nicla_altitude < 100.0f) {
+        g_packet.state = STATE_DESCENT;
+        Serial.println("NAV: descent phase started");
     }
 
-    if (crossed_500 && !parachute_deployed && nicla_altitude < 60.0f) {
-        parachute_deployed = true;
-        g_packet.state     = STATE_DESCENT;
-        break_left.write(LEFT_NEUTRAL);
-        break_right.write(RIGHT_NEUTRAL);
-        Serial.println("NAV: parachute deployed — servos to neutral");
-    }
-
-    // Checkpoint navigation — only active during descent with valid GPS
-    if (parachute_deployed && !flight_end && g_packet.secondary.gps_fix) {
+    // Checkpoint navigation — active during descent with valid GPS
+    if (g_packet.state == STATE_DESCENT && !flight_end && g_packet.secondary.gps_fix) {
         double longitude = g_packet.secondary.longitude;
         double latitude  = g_packet.secondary.latitude;
 
@@ -489,27 +497,39 @@ void navigationUpdate()
             arr[checkpoints_counter].x != 0 && arr[checkpoints_counter].y != 0) {
 
             float dist = Target.Calc_dist(longitude, latitude);
+            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
+
+            // Output navigation data when altitude sim is enabled
+            if (altitude_sim) {
+                char buf[100];
+                snprintf(buf, sizeof(buf), "NAV_SIM: heading=%.1f dist=%.1f alt=%.0f\r\n",
+                         target_heading, dist, nicla_altitude);
+                Serial.print(buf);
+            }
+
             if (dist <= 5.0f) {
                 checkpoints_counter++;
-                Target = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
+                Target = Go_to_checkpoint(arr[checkpoints_counter].y, arr[checkpoints_counter].x);
             }
 
             int leftServo  = LEFT_NEUTRAL;
             int rightServo = RIGHT_NEUTRAL;
 
-            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
             target_heading = target_heading * TURNING_RATE;
             target_heading = constrain(target_heading, -100.0f, 100.0f);
 
             // Convert heading magnitude to brake amount (0 → 90 degrees)
+            // Neutral: 90°, Full extension at 0° (right) and 180° (left)
             int brake = map(abs(target_heading), 0, 100, 0, 90);
 
             if (target_heading > 0) {
-                rightServo = RIGHT_NEUTRAL + brake;   
+                // Right servo: 90° (no brake) → 0° (full brake)
+                rightServo = constrain(RIGHT_NEUTRAL - brake, 0, 90);
             }
 
             if (target_heading < 0) {
-                leftServo = LEFT_NEUTRAL - brake;   
+                // Left servo: 90° (no brake) → 180° (full brake)
+                leftServo = constrain(LEFT_NEUTRAL + brake, 90, 180);
             }
 
             break_left.write(leftServo);
@@ -518,7 +538,7 @@ void navigationUpdate()
         } else {
             // Checkpoint list exhausted — hold last checkpoint
             if (checkpoints_counter > 0) checkpoints_counter--;
-            Target     = Go_to_checkpoint(arr[checkpoints_counter].x, arr[checkpoints_counter].y);
+            Target     = Go_to_checkpoint(arr[checkpoints_counter].y, arr[checkpoints_counter].x);
             flight_end = true;
             Serial.println("NAV: all checkpoints reached");
         }
