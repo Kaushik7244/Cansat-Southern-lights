@@ -35,6 +35,28 @@
 // NOTE: Nicla communicates via BLE in all modes — ESLOV I2C is no longer used.
 //#define ISOLATION_TEST
 
+// Helper function — calculate destination lat/lon given origin, bearing (degrees), and distance (meters)
+struct LatLng {
+    double lat;
+    double lng;
+};
+
+LatLng calculateDestinationPoint(double lat, double lon, double bearingDeg, double distanceM)
+{
+    const double EARTH_RADIUS_M = 6371000.0;  // Earth's radius in meters
+    double latRad    = lat * PI / 180.0;
+    double lonRad    = lon * PI / 180.0;
+    double bearingRad = bearingDeg * PI / 180.0;
+    double angular_distance = distanceM / EARTH_RADIUS_M;
+    
+    double newLat = asin(sin(latRad) * cos(angular_distance) +
+                         cos(latRad) * sin(angular_distance) * cos(bearingRad));
+    double newLon = lonRad + atan2(sin(bearingRad) * sin(angular_distance) * cos(latRad),
+                                   cos(angular_distance) - sin(latRad) * sin(newLat));
+    
+    return {newLat * 180.0 / PI, newLon * 180.0 / PI};
+}
+
 // ---------------------------------------------------------------------------
 // LED polarity — Portenta: LOW = on
 // ---------------------------------------------------------------------------
@@ -76,14 +98,19 @@ SensorQuaternion nicla_ori(SENSOR_ID_GEORV);  // Geo-magnetic rotation vector (a
 // UPDATE THESE BEFORE EACH FLIGHT.
 struct Checkpoint { float x; float y; };
 static const Checkpoint arr[100] = {
-    {59.80796f, 10.44519f},
-    {59.80634f, 10.45074f},
-    {59.80694f, 10.45174f},
+    {59.896537f, 10.522882f},
+    {59.896694f, 10.523529f},
+    {59.896924f, 10.523528f},
     // remaining entries zero-initialised — treated as end-of-list
 };
 
 Go_to_checkpoint Target(arr[0].y, arr[0].x);
 int              checkpoints_counter = 0;
+
+// Landing loop — 3 waypoints 10m apart to circle last checkpoint
+bool             landing_phase       = false;   // true when flying landing loop
+struct Checkpoint landing_waypoints[3] = {};
+int              landing_wp_counter  = 0;      // loops 0→1→2→0→1→...
 
 Altitude alt;
 float    nicla_altitude = 0.0f;
@@ -404,8 +431,17 @@ void navigationSetup()
         }
         nicla_active = (nicla_temp.value() != 0.0f);
         Serial.println(nicla_active ? "OK" : "connected but no data yet — continuing");
+        Serial.println("Waiting for initial magnometer calibration (Do not move) ");
+        delay(5000);
+        Serial.println("Initail magnometer calibration complete. Please calibrate for 40 seconds before launch (rotate slowly cansat in various directions)");
+        
     } else {
         Serial.println("FAILED — Nicla not found over BLE");
+
+
+
+
+
     }
 
     // Servos init at neutral position
@@ -489,64 +525,121 @@ void navigationUpdate()
     }
 
     // Checkpoint navigation — active during descent with valid GPS
-    if (g_packet.state == STATE_DESCENT && !flight_end && g_packet.secondary.gps_fix) {
-        double longitude = g_packet.secondary.longitude;
-        double latitude  = g_packet.secondary.latitude;
+    if (g_packet.state == STATE_DESCENT && !flight_end) {
+        if (g_packet.secondary.gps_fix) {
+            double longitude = g_packet.secondary.longitude;
+            double latitude  = g_packet.secondary.latitude;
 
-        if (checkpoints_counter < 99 &&
-            arr[checkpoints_counter].x != 0 && arr[checkpoints_counter].y != 0) {
+            if (checkpoints_counter < 99 &&
+                arr[checkpoints_counter].x != 0 && arr[checkpoints_counter].y != 0) {
 
-            float dist = Target.Calc_dist(longitude, latitude);
-            float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
+                float dist = Target.Calc_dist(longitude, latitude);
+                float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
 
-            // Output navigation data when altitude sim is enabled
-            if (altitude_sim) {
-                char buf[100];
-                snprintf(buf, sizeof(buf), "NAV_SIM: heading=%.1f dist=%.1f alt=%.0f\r\n",
-                         target_heading, dist, nicla_altitude);
-                Serial.print(buf);
+                // Output navigation data when altitude sim is enabled
+                if (altitude_sim) {
+                    char buf[100];
+                    snprintf(buf, sizeof(buf), "NAV_SIM: heading=%.1f dist=%.1f alt=%.0f\r\n",
+                             target_heading, dist, nicla_altitude);
+                    Serial.print(buf);
+                }
+
+                if (dist <= 5.0f) {
+                    checkpoints_counter++;
+                    Target = Go_to_checkpoint(arr[checkpoints_counter].y, arr[checkpoints_counter].x);
+                }
+
+                int leftServo  = LEFT_NEUTRAL;
+                int rightServo = RIGHT_NEUTRAL;
+
+                target_heading = target_heading * TURNING_RATE;
+                target_heading = constrain(target_heading, -100.0f, 100.0f);
+
+                // Convert heading magnitude to brake amount (0 → 90 degrees)
+                // Neutral: 90°, Full extension at 0° (right) and 180° (left)
+                int brake = map(abs(target_heading), 0, 100, 0, 90);
+
+                if (target_heading > 0) {
+                    // Right servo: 90° (no brake) → 0° (full brake)
+                    rightServo = constrain(RIGHT_NEUTRAL - brake, 0, 90);
+                }
+
+                if (target_heading < 0) {
+                    // Left servo: 90° (no brake) → 180° (full brake)
+                    leftServo = constrain(LEFT_NEUTRAL + brake, 90, 180);
+                }
+
+                break_left.write(leftServo);
+                break_right.write(rightServo);
+
+            } 
+            
+            else {
+                // Checkpoint list exhausted — start landing loop (3 waypoints 10m apart)
+                if (!landing_phase) {
+                    landing_phase = true;
+                    landing_wp_counter = 0;
+                    // Calculate 3 waypoints around current position at 120° intervals, 10m away
+                    LatLng wp0 = calculateDestinationPoint(latitude, longitude, 0.0, 10.0);
+                    LatLng wp1 = calculateDestinationPoint(latitude, longitude, 120.0, 10.0);
+                    LatLng wp2 = calculateDestinationPoint(latitude, longitude, 240.0, 10.0);
+                    landing_waypoints[0] = {(float)wp0.lng, (float)wp0.lat};
+                    landing_waypoints[1] = {(float)wp1.lng, (float)wp1.lat};
+                    landing_waypoints[2] = {(float)wp2.lng, (float)wp2.lat};
+                    Target = Go_to_checkpoint(landing_waypoints[0].y, landing_waypoints[0].x);
+                    Serial.println("NAV: entering landing loop (3 waypoints 10m apart)");
+                } else {
+                    // Flying landing loop — cycle through 3 waypoints and steer toward them
+                    float dist = Target.Calc_dist(longitude, latitude);
+                    
+                    // Calculate heading to current landing waypoint
+                    float target_heading = Target.Calc_desiered_heading(yaw_deg, longitude, latitude);
+                    
+                    int leftServo  = LEFT_NEUTRAL;
+                    int rightServo = RIGHT_NEUTRAL;
+                    
+                    target_heading = target_heading * TURNING_RATE;
+                    target_heading = constrain(target_heading, -100.0f, 100.0f);
+                    
+                    // Convert heading magnitude to brake amount (0 → 90 degrees)
+                    int brake = map(abs(target_heading), 0, 100, 0, 90);
+                    
+                    if (target_heading > 0) {
+                        // Right servo: 90° (no brake) → 0° (full brake)
+                        rightServo = constrain(RIGHT_NEUTRAL - brake, 0, 90);
+                    }
+                    
+                    if (target_heading < 0) {
+                        // Left servo: 90° (no brake) → 180° (full brake)
+                        leftServo = constrain(LEFT_NEUTRAL + brake, 90, 180);
+                    }
+                    
+                    break_left.write(leftServo);
+                    break_right.write(rightServo);
+                    
+                    // Advance to next waypoint when close enough
+                    if (dist <= 5.0f) {
+                        landing_wp_counter = (landing_wp_counter + 1) % 3;
+                        Target = Go_to_checkpoint(landing_waypoints[landing_wp_counter].y, landing_waypoints[landing_wp_counter].x);
+                    }
+                }
             }
-
-            if (dist <= 5.0f) {
-                checkpoints_counter++;
-                Target = Go_to_checkpoint(arr[checkpoints_counter].y, arr[checkpoints_counter].x);
-            }
-
-            int leftServo  = LEFT_NEUTRAL;
-            int rightServo = RIGHT_NEUTRAL;
-
-            target_heading = target_heading * TURNING_RATE;
-            target_heading = constrain(target_heading, -100.0f, 100.0f);
-
-            // Convert heading magnitude to brake amount (0 → 90 degrees)
-            // Neutral: 90°, Full extension at 0° (right) and 180° (left)
-            int brake = map(abs(target_heading), 0, 100, 0, 90);
-
-            if (target_heading > 0) {
-                // Right servo: 90° (no brake) → 0° (full brake)
-                rightServo = constrain(RIGHT_NEUTRAL - brake, 0, 90);
-            }
-
-            if (target_heading < 0) {
-                // Left servo: 90° (no brake) → 180° (full brake)
-                leftServo = constrain(LEFT_NEUTRAL + brake, 90, 180);
-            }
-
-            break_left.write(leftServo);
-            break_right.write(rightServo);
-
-        } else {
-            // Checkpoint list exhausted — hold last checkpoint
-            if (checkpoints_counter > 0) checkpoints_counter--;
-            Target     = Go_to_checkpoint(arr[checkpoints_counter].y, arr[checkpoints_counter].x);
-            flight_end = true;
-            Serial.println("NAV: all checkpoints reached");
+        } else if (landing_phase) {
+            // GPS lost during landing loop — set servos to neutral and wait for GPS to return
+            break_left.write(LEFT_NEUTRAL);
+            break_right.write(RIGHT_NEUTRAL);
+            Serial.println("NAV: GPS lost during landing loop — servos neutral, descending");
         }
     }
 
-    // Landing
-    if (flight_end && nicla_altitude < 6.0f && g_packet.state != STATE_LANDED) {
+    // Landing — when below 3m in landing loop, shut down all nav systems
+    if (landing_phase && nicla_altitude < 3.0f && g_packet.state != STATE_LANDED) {
+        flight_end = true;
         g_packet.state = STATE_LANDED;
+        // Hold servos at neutral to avoid flutter during final descent
+        break_left.write(LEFT_NEUTRAL);
+        break_right.write(RIGHT_NEUTRAL);
+        Serial.println("NAV: landing threshold reached — nav systems shutdown");
         Serial.println("NAV: landed — triggering M4 log dump");
         RPC.call("DumpM4Log");
     }
@@ -624,6 +717,14 @@ void printPacketToSerial()
     Serial.print(nicla_altitude, 0);
     Serial.print("m  yaw:");
     Serial.print(yaw_deg, 1);
+    Serial.print("  ");
+    if (landing_phase) {
+        Serial.print("LANDING_PHASE  wp:");
+        Serial.print(landing_wp_counter);
+    } else {
+        Serial.print("checkpoint:");
+        Serial.print(checkpoints_counter);
+    }
     if (g_packet.secondary.gps_fix) {
         Serial.print("  GPS:");
         Serial.print(g_packet.secondary.latitude, 5);
