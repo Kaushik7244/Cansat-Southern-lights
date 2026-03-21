@@ -8,7 +8,7 @@
  * Normal wiring : Serial2 (D18 RX / D19 TX)
  * Temporary swap: Serial1 — used when APC220 is disconnected for bench testing.
  */
-#define GPS_SERIAL  Serial1   // UART connected to Grove Air530 RX/TX
+#define GPS_SERIAL  Serial2   // UART connected to Grove Air530 RX/TX
 #define GPS_BAUD    9600
 
 /**
@@ -18,7 +18,7 @@
  * Comment out APC_ENABLED to disable the APC220 entirely — e.g. when GPS is
  * temporarily sharing Serial1 for bench testing.
  */
-// #define APC_ENABLED
+#define APC_ENABLED
 #define APC_SERIAL  Serial1
 #define APC_BAUD    9600
 
