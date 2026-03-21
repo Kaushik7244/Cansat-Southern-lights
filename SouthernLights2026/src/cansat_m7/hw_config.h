@@ -1,3 +1,4 @@
+#pragma once
 /**
  * hw_config.h — SouthernLights CanSat 2026
  *
@@ -5,28 +6,24 @@
  * Change here to remap a peripheral without touching any driver file.
  *
  * ── GPS ────────────────────────────────────────────────────────────────────
- * Normal wiring : Serial2 (D18 RX / D19 TX)
- * Temporary swap: Serial1 — used when APC220 is disconnected for bench testing.
+ * DFRobot IIC to Dual UART (DFR0627) channel 2 (UART_2).
  */
-#define GPS_SERIAL  Serial2   // UART connected to Grove Air530 RX/TX
+#include "iic_uart.h"
+#define GPS_SERIAL  iic_gps   // DFRobot IICSerial UART_2
 #define GPS_BAUD    9600
 
 /**
  * ── APC220 radio ────────────────────────────────────────────────────────────
- * Normal port: Serial1 (D13 RX / D14 TX), 9600 bps.
- *
- * Comment out APC_ENABLED to disable the APC220 entirely — e.g. when GPS is
- * temporarily sharing Serial1 for bench testing.
+ * DFRobot IIC to Dual UART (DFR0627) channel 1 (UART_1), 9600 bps.
  */
 #define APC_ENABLED
-#define APC_SERIAL  Serial1
+#define APC_SERIAL  iic_apc   // DFRobot IICSerial UART_1
 #define APC_BAUD    9600
 
 /**
  * ── I2C buses ───────────────────────────────────────────────────────────────
- * Wire  (I2C3, SDA=D11 / SCL=D12) — BME688 on M4 (primed by M7 before M4 release)
- * Wire1 (I2C1, SDA=D0  / SCL=D1 ) — Nicla Sense ME BLE (managed by BHY2Host)
- *
- * No defines needed here — Wire and Wire1 are used directly in code.
- * Listed for reference only.
+ * Wire  (I2C3, SDA=PH_8 / SCL=PH_7) — ESLOV + Qwiic (same physical bus)
+ *   BME688 @ 0x77 (M4), WK2132 @ 0x10 (M7) — shared bus, low collision risk
+ * Wire1 (I2C1, SDA=PB_7 / SCL=PB_6) — internal only: PMIC/fuel gauge/crypto
+ *   No external pins accessible. BHY2Host uses BLE, not Wire1.
  */

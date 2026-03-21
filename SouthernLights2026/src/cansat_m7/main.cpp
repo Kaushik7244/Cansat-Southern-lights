@@ -35,28 +35,6 @@
 // NOTE: Nicla communicates via BLE in all modes — ESLOV I2C is no longer used.
 //#define ISOLATION_TEST
 
-// Helper function — calculate destination lat/lon given origin, bearing (degrees), and distance (meters)
-struct LatLng {
-    double lat;
-    double lng;
-};
-
-LatLng calculateDestinationPoint(double lat, double lon, double bearingDeg, double distanceM)
-{
-    const double EARTH_RADIUS_M = 6371000.0;  // Earth's radius in meters
-    double latRad    = lat * PI / 180.0;
-    double lonRad    = lon * PI / 180.0;
-    double bearingRad = bearingDeg * PI / 180.0;
-    double angular_distance = distanceM / EARTH_RADIUS_M;
-    
-    double newLat = asin(sin(latRad) * cos(angular_distance) +
-                         cos(latRad) * sin(angular_distance) * cos(bearingRad));
-    double newLon = lonRad + atan2(sin(bearingRad) * sin(angular_distance) * cos(latRad),
-                                   cos(angular_distance) - sin(latRad) * sin(newLat));
-    
-    return {newLat * 180.0 / PI, newLon * 180.0 / PI};
-}
-
 // ---------------------------------------------------------------------------
 // LED polarity — Portenta: LOW = on
 // ---------------------------------------------------------------------------
@@ -140,10 +118,12 @@ uint8_t          g_ring_tail = 0;
 static uint32_t g_last_tx_ms         = 0;
 static uint32_t g_last_drain_ms      = 0;
 static uint32_t g_last_nicla_ms      = 0;
+static uint32_t g_last_gps_ms        = 0;
 static uint32_t g_last_gps_status_ms = 0;
 static const uint32_t TX_INTERVAL_MS         = 1000;   // transmit every 1 s
 static const uint32_t DRAIN_INTERVAL_MS      = 10000;  // flush SD every 10 s
-static const uint32_t NICLA_INTERVAL_MS      = 200;    // poll Nicla at 5 Hz — limits I2C bus usage
+static const uint32_t NICLA_INTERVAL_MS      = 200;    // poll Nicla at 5 Hz
+static const uint32_t GPS_INTERVAL_MS        = 20;     // poll GPS at 50 Hz — limits Wire (I2C3) bus load shared with M4 BME688
 static const uint32_t GPS_STATUS_INTERVAL_MS = 5000;   // GPS acquisition status every 5 s
 
 // ---------------------------------------------------------------------------
@@ -175,7 +155,7 @@ void setup()
    
 
     Serial.begin(115200);
-    while (!Serial) ;
+    { unsigned long _t = millis(); while (!Serial && millis() - _t < 2000) ; }
     Serial.println("USB Serial up at 115200");
 
     // RPC must start before WiFi so M4 can begin sending sensor data
@@ -236,10 +216,15 @@ void setup()
         g_packet.m7_errors++;
     }
 
-    // Radios — APC220 UART + LoRa Vision Shield
+    // DFRobot IIC to Dual UART — must init before GPS and telemetry
+    Serial.print("IIC-UART init... ");
+    if (!iicUartInit()) {
+        Serial.println("WARNING — one or both IIC-UART channels failed");
+        g_packet.m7_errors++;
+    }
+
+    // Radios — APC220 on IIC-UART ch1
     Serial.print("Telemetry init... ");
-    Serial.println("skip");
-    /*
     if (telemetryInit(g_packet)) {
         Serial.print("OK");
         if (telemetryLoRaAvailable()) Serial.print(" (APC220 + LoRa)");
@@ -248,9 +233,8 @@ void setup()
     } else {
         Serial.println("WARNING — no radio available");
     }
-    */
 
-    // GPS
+    // GPS on IIC-UART ch2
     gpsInit();
 #endif  // ISOLATION_TEST
 
@@ -260,9 +244,9 @@ void setup()
     g_packet.state = STATE_PAD;
 
 #ifndef ISOLATION_TEST
-    // Prime Wire (I2C3) for M4's BME688 access.
-    // EslovHandler now uses Wire1 (I2C1) for Nicla, so Wire is not touched by
-    // Nicla init. M7 must prime Wire before releasing M4 regardless of Nicla state.
+#ifndef BME_SPI
+    // Prime Wire (I2C3) for M4's BME688 I2C access before releasing M4.
+    // Not needed in BME_SPI mode — M4 uses SPI, Wire is only for WK2132.
     {
         Wire.begin();
         Wire.setClock(400000);
@@ -275,13 +259,13 @@ void setup()
             while (Wire.available()) Wire.read();
             delay(5);
         }
-        Serial.println("Wire primed for M4 (BME688)");
+        Serial.println("Wire primed for M4 (BME688 I2C)");
     }
-
+#endif
     Serial.println("Signaling M4 Core to start sensor operations");
-    RPC.call("M7Ready"); // release M4 to start I2C / BME688 init
+    RPC.call("M7Ready"); // release M4 to start BME688 init
 #else
-    Serial.println("ISOLATION_TEST: M4 kept idle, Wire priming skipped");
+    Serial.println("ISOLATION_TEST: M4 kept idle");
 #endif
 
     digitalWrite(LEDR, OFF);
@@ -346,8 +330,11 @@ void loop()
     }
 
 #ifndef ISOLATION_TEST
-    // GPS — non-blocking poll; fills g_packet.secondary when fix is valid
-    gpsPoll(g_packet);
+    // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688
+    if (now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
+        gpsPoll(g_packet);
+        g_last_gps_ms = now_ms;
+    }
 
 #ifdef SLDEBUG
     // Periodic acquisition status — stops once fix is acquired

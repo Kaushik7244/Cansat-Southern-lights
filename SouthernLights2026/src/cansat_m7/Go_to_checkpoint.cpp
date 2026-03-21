@@ -2,6 +2,22 @@
 #include <Arduino.h>
 #include <math.h>
 
+LatLng calculateDestinationPoint(double lat, double lon, double bearingDeg, double distanceM)
+{
+    const double EARTH_RADIUS_M = 6371000.0;
+    double latRad     = lat * PI / 180.0;
+    double lonRad     = lon * PI / 180.0;
+    double bearingRad = bearingDeg * PI / 180.0;
+    double angular_distance = distanceM / EARTH_RADIUS_M;
+
+    double newLat = asin(sin(latRad) * cos(angular_distance) +
+                         cos(latRad) * sin(angular_distance) * cos(bearingRad));
+    double newLon = lonRad + atan2(sin(bearingRad) * sin(angular_distance) * cos(latRad),
+                                   cos(angular_distance) - sin(latRad) * sin(newLat));
+
+    return {newLat * 180.0 / PI, newLon * 180.0 / PI};
+}
+
 Go_to_checkpoint::Go_to_checkpoint(double longitude, double latitude)
 {
     desierd_long = longitude;

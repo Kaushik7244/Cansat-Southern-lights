@@ -1,4 +1,12 @@
 #pragma once
+#include <Arduino.h>
+
+struct LatLng {
+    double lat;
+    double lng;
+};
+
+LatLng calculateDestinationPoint(double lat, double lon, double bearingDeg, double distanceM);
 
 class Go_to_checkpoint {
 public:

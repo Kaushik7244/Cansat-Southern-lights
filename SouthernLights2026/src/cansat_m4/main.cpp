@@ -1,6 +1,16 @@
 #include <RPC.h>
-#include <Wire.h>
 #include <DFRobot_BME68x.h>
+
+// Select BME688 bus: define BME_SPI to use SPI (D7-D10), otherwise I2C (Wire, 0x77).
+// Set via platformio.ini build_flags: -DBME_SPI
+//#define BME_SPI
+
+#ifdef BME_SPI
+  #include <SPI.h>
+  #define BME_CS  D7   // PI_0 — standard SPI SS pin
+#else
+  #include <Wire.h>
+#endif
 
 //#define SLDEBUG
 
@@ -20,7 +30,11 @@ int   localLoop;
 int   cnt         = 0;
 float temperature, pressure, humidity, gasresistance, altitude;
 
-DFRobot_BME68x_I2C bme(0x77, &Wire); // 0x77 confirmed by I2C scan
+#ifdef BME_SPI
+  DFRobot_BME68x_SPI bme(BME_CS);
+#else
+  DFRobot_BME68x_I2C bme(0x77, &Wire);
+#endif
 
 // ---------------------------------------------------------------------------
 // In-memory flight log
@@ -110,11 +124,8 @@ void setup()
     // before touching the shared I2C bus.
     while (!m7_ready) delay(50);
 
-    // I2C bus exercise — reads BME688 chip-ID register (0xD0) 20 times to prime
-    // the bus with real ACK transactions before bme.begin().
-    // Wire.begin() must be called here to initialise M4's Wire software object;
-    // even though M7 initialises the shared I2C hardware, M4's Wire instance is
-    // independent and must be initialised separately.
+#ifndef BME_SPI
+    // I2C bus exercise — primes the shared Wire bus before bme.begin().
     auto i2cExercise = []() {
         Wire.begin();
         Wire.setClock(400000);
@@ -122,7 +133,7 @@ void setup()
         uint8_t acks = 0;
         for (uint8_t i = 0; i < 20; i++) {
             Wire.beginTransmission(0x77);
-            Wire.write(0xD0);              // chip-ID register
+            Wire.write(0xD0);
             Wire.endTransmission();
             uint8_t cnt = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
             if (cnt > 0) { Wire.read(); acks++; }
@@ -134,18 +145,19 @@ void setup()
     };
     i2cExercise();
     RPC.print("M4 setup: I2C bus exercise done\r\n");
+#endif
 
     RPC.print("M4 setup: calling bme.begin()\r\n");
     uint8_t bme_rslt = 1;
-    while (bme_rslt != 0)
-    {
+    while (bme_rslt != 0) {
         bme_rslt = bme.begin();
-        if (bme_rslt != 0)
-        {
+        if (bme_rslt != 0) {
             RPC.call("M4Error");
             RPC.print("bme begin failure!\r\n");
             delay(2000);
-            i2cExercise();   // re-exercise before each retry
+#ifndef BME_SPI
+            i2cExercise();
+#endif
         }
     }
     RPC.print("M4 setup: bme.begin() OK\r\n");
