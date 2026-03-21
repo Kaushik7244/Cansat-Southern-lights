@@ -7,7 +7,7 @@
 
 #ifdef BME_SPI
   #include <SPI.h>
-  #define BME_CS  D7   // PI_0 — standard SPI SS pin
+  #define BME_CS  7    // D7 = PI_0 — must be Arduino pin number, not PinName
 #else
   #include <Wire.h>
 #endif
@@ -109,6 +109,15 @@ static void onM7Ready() { m7_ready = true; }
 
 void setup()
 {
+#ifdef BME_SPI
+    // Assert CS LOW immediately so BME688 latches SPI mode at power-on.
+    // Must happen before RPC.begin() and any delay.
+    pinMode(BME_CS, OUTPUT);
+    digitalWrite(BME_CS, LOW);
+    delayMicroseconds(100);
+    SPI.begin();
+    digitalWrite(BME_CS, HIGH);
+#endif
     RPC.begin();
 #ifdef ISOLATION_TEST
     // M7 never calls "M7Ready" in isolation mode — idle here to keep M4 silent.

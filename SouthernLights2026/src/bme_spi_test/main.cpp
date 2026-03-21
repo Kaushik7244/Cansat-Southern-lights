@@ -18,7 +18,7 @@
 #include <SPI.h>
 #include <DFRobot_BME68x.h>
 
-#define BME_CS  D7
+#define BME_CS  7      // D7 = PI_0 — must be Arduino pin number, not PinName
 
 static DFRobot_BME68x_SPI bme(BME_CS);
 
@@ -27,6 +27,14 @@ static const int LED_OFF = HIGH;
 
 void setup()
 {
+    // Assert CS LOW immediately — BME688 latches SPI mode at power-on based on CS.
+    // This must happen before any delay or Serial init.
+    pinMode(BME_CS, OUTPUT);
+    digitalWrite(BME_CS, LOW);
+    delayMicroseconds(100);
+    SPI.begin();
+    digitalWrite(BME_CS, HIGH);   // deselect after SPI bus is up
+
     pinMode(LEDR, OUTPUT);
     pinMode(LEDG, OUTPUT);
     pinMode(LEDB, OUTPUT);
@@ -35,8 +43,29 @@ void setup()
     digitalWrite(LEDB, LED_OFF);
 
     Serial.begin(115200);
-    { unsigned long t = millis(); while (!Serial && millis() - t < 2000) ; }
+    { unsigned long t = millis(); while (!Serial && millis() - t < 4000) ; }
     Serial.println("BME688 SPI test starting...");
+    delay(10);
+
+    // Mode probe — try all 4 SPI modes at 3 speeds.
+    // Expected chip ID: 0x61 (BME688). 0xFF = MISO floating. 0x00 = no clock reaching chip.
+    const uint8_t  modes[4]  = { SPI_MODE0, SPI_MODE1, SPI_MODE2, SPI_MODE3 };
+    const uint32_t speeds[3] = { 100000, 1000000, 4000000 };
+    for (uint8_t s = 0; s < 3; s++) {
+        for (uint8_t m = 0; m < 4; m++) {
+            digitalWrite(BME_CS, LOW);
+            SPI.beginTransaction(SPISettings(speeds[s], MSBFIRST, modes[m]));
+            SPI.transfer(0xD0 | 0x80);
+            uint8_t chip_id = SPI.transfer(0x00);
+            SPI.endTransaction();
+            digitalWrite(BME_CS, HIGH);
+            Serial.print(speeds[s]); Serial.print("Hz Mode"); Serial.print(m);
+            Serial.print(" ID: 0x"); Serial.print(chip_id, HEX);
+            Serial.println(chip_id == 0x61 ? "  <-- OK" : "");
+            delay(10);
+        }
+    }
+    SPI.end();
 
     uint8_t rslt = bme.begin();
     if (rslt != 0) {
