@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Southern Lights 2026 — Portenta H7 Pinout</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10.5pt;
+    color: #1a1a1a;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 12px 0;
+    line-height: 1.45;
+  }
+
+  /* ── Header ── */
+  .doc-header {
+    border-bottom: 2.5px solid #1a3a5c;
+    padding-bottom: 8px;
+    margin-bottom: 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .doc-header h1 {
+    margin: 0;
+    font-size: 17pt;
+    color: #1a3a5c;
+    letter-spacing: -0.3px;
+  }
+  .doc-meta {
+    font-size: 9pt;
+    color: #555;
+    text-align: right;
+    line-height: 1.6;
+  }
+
+  /* ── Sections ── */
+  h2 {
+    font-size: 11pt;
+    color: #1a3a5c;
+    border-bottom: 1px solid #c0cfe0;
+    padding-bottom: 3px;
+    margin: 18px 0 7px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  p, .note {
+    margin: 4px 0 8px 0;
+  }
+
+  .note {
+    font-size: 9.5pt;
+    color: #444;
+    background: #f0f4f8;
+    border-left: 3px solid #7a9fc0;
+    padding: 5px 9px;
+    border-radius: 2px;
+  }
+
+  /* ── Tables ── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-bottom: 6px;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  th {
+    background: #1a3a5c;
+    color: #fff;
+    padding: 5px 8px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 9pt;
+  }
+  td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #dde4ec;
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #f4f7fb; }
+  tr:last-child td { border-bottom: none; }
+
+  code {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 9pt;
+    background: #e8edf3;
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
+  /* ── Two-column layout for smaller tables ── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 4px;
+  }
+  .two-col .col-label {
+    font-size: 9pt;
+    font-weight: 600;
+    color: #1a3a5c;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── Footer ── */
+  .doc-footer {
+    margin-top: 22px;
+    border-top: 1px solid #c0cfe0;
+    padding-top: 6px;
+    font-size: 8.5pt;
+    color: #888;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @media print {
+    body { padding: 0; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <h1>Southern Lights 2026 &mdash; Portenta H7 Pinout</h1>
+  <div class="doc-meta">
+    Arduino Portenta H7 + Vision Shield LoRa<br>
+    CanSat 2026 flight build<br>
+    2026-03-22
+  </div>
+</div>
+
+<!-- ── UART ─────────────────────────────────────────── -->
+<h2>UART / Serial</h2>
+<table>
+  <tr><th>Port</th><th>STM32 pins</th><th>Role</th><th>Device</th><th>Baud</th><th>Notes</th></tr>
+  <tr>
+    <td><code>SerialLoRa</code></td>
+    <td>PJ8 TX / PJ9 RX</td>
+    <td>Vision Shield Murata LoRa</td>
+    <td>MKRWAN library (M7)</td>
+    <td>19200 8E1</td>
+    <td>HD connector only — modem responds to <code>lora.begin()</code> but AT TX unsupported; TX disabled in flight build</td>
+  </tr>
+</table>
+<div class="note">APC220 and GPS are <strong>not on hardware UARTs</strong>. Both are routed through the DFRobot WK2132 IIC-UART bridge on I2C — see IIC-UART section below.</div>
+
+<!-- ── IIC-UART ──────────────────────────────────────── -->
+<h2>IIC-UART &mdash; DFRobot WK2132 (DFR0627) @ I2C addr 0x10</h2>
+<p>Both UART channels share one WK2132 chip on <code>Wire</code> (I2C3, ESLOV/Qwiic). DIP: A1=GND, A0=GND &rarr; 0x10.</p>
+<table>
+  <tr><th>Channel</th><th>Object</th><th>Role</th><th>Device</th><th>Baud</th></tr>
+  <tr><td>UART_1</td><td><code>iic_apc</code></td><td>Telemetry downlink</td><td>APC220 433 MHz radio</td><td>9600</td></tr>
+  <tr><td>UART_2</td><td><code>iic_gps</code></td><td>GNSS</td><td>Grove Air530 GPS</td><td>9600</td></tr>
+</table>
+
+<!-- ── I2C ───────────────────────────────────────────── -->
+<h2>I2C</h2>
+<table>
+  <tr><th>Bus</th><th>STM32 pins</th><th>Arduino object</th><th>Devices</th><th>Notes</th></tr>
+  <tr>
+    <td>I2C3</td>
+    <td>PH7 SCL / PH8 SDA</td>
+    <td><code>Wire</code></td>
+    <td>WK2132 (DFR0627) @ 0x10 &mdash; 2&times; UART bridge (APC220 + GPS)</td>
+    <td>ESLOV / Qwiic connector</td>
+  </tr>
+  <tr>
+    <td>I2C1</td>
+    <td>— (internal)</td>
+    <td><code>Wire1</code></td>
+    <td>PMIC, fuel gauge, crypto</td>
+    <td>No external pins — not accessible from breakout header</td>
+  </tr>
+</table>
+
+<!-- ── SPI ───────────────────────────────────────────── -->
+<h2>SPI &mdash; M4 core only</h2>
+<p>Both devices share the same SPI bus with independent CS lines. MOSI/MISO/SCK are the standard H7 breakout header pins.</p>
+<table>
+  <tr><th>Arduino pin</th><th>STM32 pin</th><th>Role</th><th>Device</th></tr>
+  <tr><td>D7</td><td>PI_0</td><td><code>BME_CS</code> &mdash; chip select</td><td>BME688 environmental sensor</td></tr>
+  <tr><td>D6</td><td>PA_8</td><td><code>LORA_NSS</code> &mdash; chip select</td><td>RFM95W 868 MHz LoRa</td></tr>
+  <tr><td>D5</td><td>PC_6</td><td><code>LORA_DIO0</code></td><td>RFM95W</td></tr>
+  <tr><td>D4</td><td>PC_7</td><td><code>LORA_RESET</code></td><td>RFM95W</td></tr>
+</table>
+<div class="note">RFM95W config: 868 MHz &nbsp;|&nbsp; SF9 &nbsp;|&nbsp; BW125 &nbsp;|&nbsp; CR4/5 &nbsp;|&nbsp; +17 dBm &nbsp;|&nbsp; sync word 0x12</div>
+
+<!-- ── Vision Shield + Servo ─────────────────────────── -->
+<div class="two-col">
+  <div>
+    <div class="col-label">Vision Shield control pins (M7, MKRWAN)</div>
+    <table>
+      <tr><th>Pin</th><th>Role</th></tr>
+      <tr><td>PC7</td><td><code>LORA_RESET</code></td></tr>
+      <tr><td>PG7</td><td><code>LORA_BOOT0</code></td></tr>
+      <tr><td>PJ11</td><td><code>LORA_IRQ_DUMB</code></td></tr>
+    </table>
+    <div class="note" style="margin-top:5px;">Driven automatically by <code>lora.begin()</code> — do not reuse.</div>
+  </div>
+  <div>
+    <div class="col-label">PWM / Servo (M7)</div>
+    <table>
+      <tr><th>STM32 pin</th><th>Role</th></tr>
+      <tr><td>PH_15</td><td><code>SERVO_PIN_LEFT</code> &mdash; left brake servo</td></tr>
+      <tr><td>PK_1</td><td><code>SERVO_PIN_RIGHT</code> &mdash; right brake servo</td></tr>
+    </table>
+    <div class="note" style="margin-top:5px;">Both servos default to 90&deg; neutral at boot.</div>
+  </div>
+</div>
+
+<!-- ── Wireless ──────────────────────────────────────── -->
+<h2>Wireless (no GPIO allocation)</h2>
+<table>
+  <tr><th>Protocol</th><th>Device</th><th>Notes</th></tr>
+  <tr><td>BLE</td><td>Nicla Sense ME</td><td>BHY2Host BLE — no wires from H7; provides barometer, temperature, orientation</td></tr>
+  <tr><td>WiFi</td><td>H7 onboard</td><td>Disabled in flight build (<code>WIFI_ENABLED = false</code>)</td></tr>
+</table>
+
+<!-- ── Summary ───────────────────────────────────────── -->
+<h2>Resource Budget</h2>
+<table>
+  <tr><th>Resource</th><th>Used</th><th>Free</th></tr>
+  <tr><td>UART (hardware)</td><td>SerialLoRa — Vision Shield (TX disabled)</td><td>Serial1, Serial2, Serial3 on breakout header</td></tr>
+  <tr><td>IIC-UART</td><td>2 channels — APC220 (UART_1), GPS (UART_2) via WK2132</td><td>—</td></tr>
+  <tr><td>I2C</td><td>Wire: WK2132 @ 0x10 (2&times; UART bridge)</td><td>Wire1 internal only</td></tr>
+  <tr><td>SPI</td><td>D4–D7 — BME688 + RFM95W (M4)</td><td>Full SPI available on M7 breakout pins</td></tr>
+  <tr><td>PWM</td><td>PH_15, PK_1 (servos)</td><td>Many remaining</td></tr>
+  <tr><td>BLE</td><td>Nicla Sense ME</td><td>—</td></tr>
+  <tr><td>WiFi</td><td>Disabled</td><td>—</td></tr>
+</table>
+
+<div class="doc-footer">
+  <span>Southern Lights CanSat 2026</span>
+  <span>Source: <code>docs/h7_pinout.md</code></span>
+  <span>2026-03-22</span>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Southern Lights 2026 — System Overview</title>
+<style>
+  @page { size: A4; margin: 14mm 14mm 14mm 14mm; }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 9.5pt;
+    color: #1a1a1a;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 10px 0;
+    line-height: 1.4;
+  }
+
+  /* ── Header ── */
+  .doc-header {
+    border-bottom: 2.5px solid #1a3a5c;
+    padding-bottom: 7px;
+    margin-bottom: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .doc-header h1 { margin: 0; font-size: 16pt; color: #1a3a5c; }
+  .doc-meta { font-size: 8.5pt; color: #555; text-align: right; line-height: 1.6; }
+
+  h2 {
+    font-size: 10pt;
+    color: #1a3a5c;
+    border-bottom: 1px solid #b0c4d8;
+    padding-bottom: 2px;
+    margin: 14px 0 6px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  code {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 8.5pt;
+    background: #e8edf3;
+    padding: 1px 3px;
+    border-radius: 2px;
+  }
+
+  /* ── Architecture diagram ── */
+  .arch {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+  }
+
+  /* Column labels */
+  .arch-col { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .arch-col-label {
+    text-align: center;
+    font-size: 7.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #666;
+    margin-bottom: 2px;
+  }
+
+  /* Board boxes */
+  .board {
+    border-radius: 5px;
+    border: 2px solid;
+    padding: 7px 9px;
+    position: relative;
+  }
+  .board-h7    { border-color: #1a3a5c; background: #f0f5fa; }
+  .board-nicla { border-color: #2e7d50; background: #f0faf4; }
+  .board-gs    { border-color: #7a4a00; background: #fdf6ec; }
+  .board-pc    { border-color: #555;    background: #f7f7f7; }
+
+  .board-title {
+    font-weight: 700;
+    font-size: 9.5pt;
+    margin-bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .badge {
+    font-size: 7.5pt;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #fff;
+  }
+  .badge-m7    { background: #1a3a5c; }
+  .badge-m4    { background: #2d5fa6; }
+  .badge-nicla { background: #2e7d50; }
+  .badge-gs    { background: #7a4a00; }
+
+  /* Core sub-boxes inside H7 */
+  .core {
+    border-radius: 3px;
+    border: 1.5px solid;
+    padding: 5px 7px;
+    margin-bottom: 5px;
+  }
+  .core:last-child { margin-bottom: 0; }
+  .core-m7 { border-color: #1a3a5c; background: #fff; }
+  .core-m4 { border-color: #2d5fa6; background: #f5f8ff; }
+
+  .core-title {
+    font-weight: 700;
+    font-size: 9pt;
+    color: #1a3a5c;
+    margin-bottom: 4px;
+  }
+  .core-m4 .core-title { color: #2d5fa6; }
+
+  /* Peripheral rows inside cores */
+  .periph-list { margin: 0; padding: 0; list-style: none; }
+  .periph-list li {
+    padding: 2px 0 2px 10px;
+    border-left: 2px solid #c8d8e8;
+    margin-left: 4px;
+    margin-bottom: 2px;
+    font-size: 9pt;
+  }
+  .periph-list li:last-child { margin-bottom: 0; }
+  .pl-label {
+    font-weight: 600;
+    font-size: 8pt;
+    color: #1a3a5c;
+    display: inline-block;
+    min-width: 68px;
+  }
+
+  /* RF links column */
+  .rf-links { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+  .rf-link {
+    border-radius: 4px;
+    border: 1.5px dashed;
+    padding: 5px 7px;
+    font-size: 8.5pt;
+    text-align: center;
+  }
+  .rf-ble   { border-color: #2e7d50; background: #f0faf4; color: #2e7d50; }
+  .rf-lora  { border-color: #2d5fa6; background: #f0f4ff; color: #2d5fa6; }
+  .rf-apc   { border-color: #8a4a00; background: #fff7ee; color: #8a4a00; }
+  .rf-link .rf-title { font-weight: 700; font-size: 8.5pt; }
+  .rf-link .rf-arrow { font-size: 9pt; }
+  .rf-link .rf-detail { font-size: 7.5pt; margin-top: 2px; color: inherit; opacity: 0.8; }
+
+  /* ── Detail tables ── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-bottom: 5px;
+    font-size: 9pt;
+    page-break-inside: avoid;
+  }
+  th {
+    background: #1a3a5c;
+    color: #fff;
+    padding: 4px 7px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 8.5pt;
+  }
+  th.th-m4    { background: #2d5fa6; }
+  th.th-nicla { background: #2e7d50; }
+  th.th-gs    { background: #7a4a00; }
+  td {
+    padding: 3px 7px;
+    border-bottom: 1px solid #dde4ec;
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #f4f7fb; }
+  tr:last-child td { border-bottom: none; }
+
+  .note {
+    font-size: 8.5pt;
+    color: #444;
+    background: #f0f4f8;
+    border-left: 3px solid #7a9fc0;
+    padding: 4px 8px;
+    border-radius: 2px;
+    margin: 4px 0 8px;
+  }
+  .note-warn {
+    border-left-color: #c07800;
+    background: #fdf6ec;
+  }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .col-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: #1a3a5c;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .col-label-m4    { color: #2d5fa6; }
+  .col-label-nicla { color: #2e7d50; }
+  .col-label-gs    { color: #7a4a00; }
+
+  .doc-footer {
+    margin-top: 16px;
+    border-top: 1px solid #c0cfe0;
+    padding-top: 5px;
+    font-size: 8pt;
+    color: #999;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @media print {
+    body { padding: 0; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- HEADER                                                                 -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="doc-header">
+  <h1>Southern Lights 2026 &mdash; System Overview</h1>
+  <div class="doc-meta">
+    CanSat 2026 — hardware &amp; communication architecture<br>
+    2026-03-22
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- ARCHITECTURE DIAGRAM                                                   -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>System Architecture</h2>
+
+<div class="arch">
+
+  <!-- ── Nicla ── -->
+  <div class="arch-col" style="max-width:155px;">
+    <div class="arch-col-label">Sensor node</div>
+    <div class="board board-nicla">
+      <div class="board-title"><span class="badge badge-nicla">NICLA</span> Nicla Sense ME</div>
+      <ul class="periph-list">
+        <li><span class="pl-label">BHI260AP</span> sensor hub</li>
+        <li><span class="pl-label">Barometer</span> pressure / alt</li>
+        <li><span class="pl-label">Temperature</span> onboard</li>
+        <li><span class="pl-label">Orientation</span> geo-mag rotation vector (accel + gyro + mag)</li>
+        <li><span class="pl-label">BLE adv.</span> name: "NICLA"</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── RF links (left) ── -->
+  <div class="arch-col" style="max-width:100px; justify-content: center; margin-top: 40px;">
+    <div class="rf-links">
+      <div class="rf-link rf-ble">
+        <div class="rf-title">BLE</div>
+        <div class="rf-arrow">&#8644;</div>
+        <div class="rf-detail">BHY2Host<br>5 Hz poll</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Portenta H7 ── -->
+  <div class="arch-col">
+    <div class="arch-col-label">CanSat — main board</div>
+    <div class="board board-h7">
+      <div class="board-title"><span class="badge badge-m7">H7</span> Arduino Portenta H7 + Vision Shield LoRa</div>
+
+      <!-- M7 Core -->
+      <div class="core core-m7">
+        <div class="core-title"><span class="badge badge-m7">M7</span>&nbsp; Cortex-M7 — Main core</div>
+        <ul class="periph-list">
+          <li><span class="pl-label">WiFi</span> NTP time sync at boot only</li>
+          <li><span class="pl-label">Camera</span> Vision Shield (MIPI)</li>
+          <li><span class="pl-label">BLE host</span> BHY2Host client ↔ Nicla Sense ME</li>
+          <li><span class="pl-label">I2C3 Wire</span> WK2132 @ 0x10 — IIC-UART bridge
+            <ul class="periph-list" style="margin-top:2px;">
+              <li><span class="pl-label">UART_1</span> APC220 433 MHz radio — telemetry TX</li>
+              <li><span class="pl-label">UART_2</span> Grove Air530 GPS — GNSS</li>
+            </ul>
+          </li>
+          <li><span class="pl-label">SerialLoRa</span> Vision Shield Murata LoRa — modem alive, AT TX disabled</li>
+          <li><span class="pl-label">SD card</span> Vision Shield slot — ring buffer, drained every 10 s</li>
+          <li><span class="pl-label">Servo L</span> PH_15 — left brake servo (90° neutral)</li>
+          <li><span class="pl-label">Servo R</span> PK_1 — right brake servo (90° neutral)</li>
+          <li><span class="pl-label">Navigation</span> Go_to_checkpoint + Altitude + flight state machine</li>
+          <li><span class="pl-label">RPC</span> OpenAMP ↔ M4 (sensor data, error flags, log dump)</li>
+        </ul>
+      </div>
+
+      <!-- M4 Core -->
+      <div class="core core-m4">
+        <div class="core-title"><span class="badge badge-m4">M4</span>&nbsp; Cortex-M4 — Sensor &amp; LoRa core</div>
+        <ul class="periph-list">
+          <li><span class="pl-label">SPI D7</span> BME688 (DFRobot) — T / P / RH / gas / altitude</li>
+          <li><span class="pl-label">SPI D6/5/4</span> RFM95W — LoRa 868 MHz TX (1 Hz)</li>
+          <li><span class="pl-label">SRAM log</span> 3 000 × M4Record (72 KB) — linear, stops when full</li>
+          <li><span class="pl-label">RPC</span> OpenAMP push to M7 — <code>UpdateSensorPackage()</code></li>
+        </ul>
+      </div>
+
+    </div><!-- /board-h7 -->
+  </div><!-- /arch-col -->
+
+  <!-- ── RF links (right) ── -->
+  <div class="arch-col" style="max-width:105px; justify-content: center; margin-top: 40px;">
+    <div class="rf-links">
+      <div class="rf-link rf-lora">
+        <div class="rf-title">LoRa 868</div>
+        <div class="rf-arrow">&#8594;</div>
+        <div class="rf-detail">SF9 BW125<br>CR4/5 +17 dBm<br>sync 0x12</div>
+      </div>
+      <div class="rf-link rf-apc">
+        <div class="rf-title">APC220 433</div>
+        <div class="rf-arrow">&#8594;</div>
+        <div class="rf-detail">9600 bps<br>binary frame</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Ground station ── -->
+  <div class="arch-col" style="max-width:170px;">
+    <div class="arch-col-label">Ground station</div>
+    <div class="board board-gs">
+      <div class="board-title"><span class="badge badge-gs">GS</span> MKR WAN 1310</div>
+      <ul class="periph-list">
+        <li><span class="pl-label">LoRa RX</span> built-in Murata module — receives M4 RFM95W packets</li>
+        <li><span class="pl-label">Frame parse</span> CRC16-CCITT validation</li>
+        <li><span class="pl-label">USB Serial</span> 115 200 baud → PC</li>
+        <li><span class="pl-label">Output</span> human-readable summary + CSV lines</li>
+      </ul>
+    </div>
+    <div class="board board-pc" style="margin-top:6px;">
+      <div class="board-title" style="font-size:9pt; color:#333;">PC / Laptop</div>
+      <ul class="periph-list">
+        <li><span class="pl-label">Serial Mon.</span> live packet view</li>
+        <li><span class="pl-label">CSV log</span> pipe Serial to file</li>
+      </ul>
+    </div>
+    <div class="note note-warn" style="margin-top:6px; font-size:8pt;">
+      APC220 ground receiver (separate USB dongle) receives M7 telemetry independently. Same binary frame format.
+    </div>
+  </div>
+
+</div><!-- /arch -->
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- SENSOR DATA FLOW                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>Sensor Data Flow</h2>
+
+<table>
+  <tr>
+    <th>Sensor</th>
+    <th>Lives on</th>
+    <th>Transport to M7</th>
+    <th>In TxPacket field</th>
+    <th>Rate</th>
+  </tr>
+  <tr>
+    <td>BME688 — temperature, pressure, humidity, gas, altitude</td>
+    <td>M4 SPI (D7)</td>
+    <td>RPC <code>UpdateSensorPackage()</code></td>
+    <td><code>primary.temperature / pressure / humidity / altitude_baro</code></td>
+    <td>1 Hz</td>
+  </tr>
+  <tr>
+    <td>Nicla — barometer + temperature</td>
+    <td>Nicla BHI260AP, BLE</td>
+    <td>BHY2Host BLE → M7 thread (5 Hz)</td>
+    <td><code>primary.temperature2 / pressure2</code></td>
+    <td>5 Hz</td>
+  </tr>
+  <tr>
+    <td>Nicla — geo-magnetic rotation vector (yaw)</td>
+    <td>Nicla BHI260AP, BLE</td>
+    <td>BHY2Host BLE → M7 thread (5 Hz)</td>
+    <td>navigation only — not transmitted</td>
+    <td>5 Hz</td>
+  </tr>
+  <tr>
+    <td>GPS — lat / lon / alt / speed / heading / sats</td>
+    <td>Grove Air530, IIC-UART UART_2</td>
+    <td>M7 polls <code>iic_gps</code> at 50 Hz</td>
+    <td><code>secondary.*</code></td>
+    <td>1 Hz fix update</td>
+  </tr>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- SUBSYSTEM DETAIL TABLES                                                 -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>M7 Core — Peripherals &amp; Timing</h2>
+
+<table>
+  <tr><th>Peripheral</th><th>Interface</th><th>Address / Pin</th><th>Library / driver</th><th>Interval</th></tr>
+  <tr><td>WK2132 IIC-UART bridge</td><td>I2C3 (<code>Wire</code>)</td><td>0x10</td><td>DFRobot_IICSerial</td><td>—</td></tr>
+  <tr><td>&nbsp;&nbsp;↳ APC220 radio (telemetry TX)</td><td>IIC-UART_1</td><td>9600 bps</td><td><code>iic_apc</code></td><td>1 000 ms</td></tr>
+  <tr><td>&nbsp;&nbsp;↳ Grove Air530 GPS</td><td>IIC-UART_2</td><td>9600 bps</td><td><code>iic_gps</code> / TinyGPSPlus</td><td>20 ms poll</td></tr>
+  <tr><td>Vision Shield Murata LoRa</td><td>SerialLoRa (HD)</td><td>19200 8E1</td><td>MKRWAN — AT TX disabled</td><td>—</td></tr>
+  <tr><td>Nicla Sense ME</td><td>BLE (BHY2Host)</td><td>"NICLA"</td><td>Arduino_BHY2Host</td><td>50 ms (BLE thread)</td></tr>
+  <tr><td>SD card</td><td>Vision Shield SPI</td><td>—</td><td>Arduino SD</td><td>10 000 ms drain</td></tr>
+  <tr><td>Left brake servo</td><td>PWM</td><td>PH_15</td><td>Arduino Servo</td><td>navigation loop</td></tr>
+  <tr><td>Right brake servo</td><td>PWM</td><td>PK_1</td><td>Arduino Servo</td><td>navigation loop</td></tr>
+  <tr><td>Camera</td><td>Vision Shield (MIPI)</td><td>—</td><td>—</td><td>—</td></tr>
+  <tr><td>WiFi (NTP)</td><td>Internal</td><td>—</td><td>WiFi + WiFiUdp</td><td>boot only</td></tr>
+</table>
+
+<div class="two-col">
+  <div>
+    <div class="col-label col-label-m4">M4 Core — Peripherals</div>
+    <table>
+      <tr><th class="th-m4">Peripheral</th><th class="th-m4">Pin</th><th class="th-m4">Notes</th></tr>
+      <tr><td>BME688 (DFRobot)</td><td>SPI CS: D7 (PI_0)</td><td>T / P / RH / gas / alt</td></tr>
+      <tr><td>RFM95W LoRa TX</td><td>NSS: D6, DIO0: D5, RST: D4</td><td>868 MHz SF9 BW125 +17 dBm</td></tr>
+      <tr><td>In-memory log</td><td>M4 SRAM</td><td>3 000 records, 72 KB, linear</td></tr>
+      <tr><td>RPC → M7</td><td>OpenAMP</td><td><code>UpdateSensorPackage()</code> 1 Hz</td></tr>
+    </table>
+  </div>
+  <div>
+    <div class="col-label col-label-nicla">Nicla Sense ME — Sensors</div>
+    <table>
+      <tr><th class="th-nicla">Sensor ID</th><th class="th-nicla">Data</th><th class="th-nicla">Used for</th></tr>
+      <tr><td><code>SENSOR_ID_BARO</code></td><td>Pressure / altitude</td><td>Tier 1 TX (<code>pressure2</code>)</td></tr>
+      <tr><td><code>SENSOR_ID_TEMP</code></td><td>Temperature</td><td>Tier 1 TX (<code>temperature2</code>)</td></tr>
+      <tr><td><code>SENSOR_ID_GEORV</code></td><td>Yaw (geo-mag rotation vector)</td><td>Navigation heading only</td></tr>
+    </table>
+
+    <div class="col-label col-label-gs" style="margin-top:10px;">Ground Station — MKR WAN 1310</div>
+    <table>
+      <tr><th class="th-gs">Item</th><th class="th-gs">Detail</th></tr>
+      <tr><td>LoRa RX</td><td>868 MHz SF9 BW125 CR4/5 sync 0x12 — matches M4 TX</td></tr>
+      <tr><td>Frame validation</td><td>CRC16-CCITT (poly 0x1021) — silent discard on error</td></tr>
+      <tr><td>Serial output</td><td>115 200 baud — human summary + <code>CSV,…</code> line per packet</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- FLIGHT STATE MACHINE                                                    -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>Flight State Machine (M7)</h2>
+
+<table>
+  <tr><th>State</th><th>Description</th><th>Servo behaviour</th></tr>
+  <tr><td><code>STATE_BOOT</code></td><td>Power-on init — WiFi/NTP, Nicla BLE, IIC-UART, SD</td><td>Neutral 90°</td></tr>
+  <tr><td><code>STATE_PAD</code></td><td>On launch pad — waiting for launch detect (altitude threshold)</td><td>Neutral 90°</td></tr>
+  <tr><td><code>STATE_ASCENT</code></td><td>Ascending — recording, transmitting, no navigation</td><td>Neutral 90°</td></tr>
+  <tr><td><code>STATE_APOGEE</code></td><td>Apogee detected — transition to descent</td><td>Neutral 90°</td></tr>
+  <tr><td><code>STATE_DESCENT</code></td><td>Descending — active brake servo navigation toward checkpoints</td><td>Active — Go_to_checkpoint</td></tr>
+  <tr><td><code>STATE_LANDED</code></td><td>Landed — triggers M4 log dump via RPC <code>DumpM4Log</code></td><td>Neutral 90°</td></tr>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- TELEMETRY PACKET                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>Telemetry Packet Structure (TxPacket)</h2>
+
+<table>
+  <tr><th>Tier</th><th>Field group</th><th>Fields</th><th>Transport</th></tr>
+  <tr>
+    <td rowspan="2"><strong>Header</strong></td>
+    <td>Frame</td>
+    <td><code>0xAA 0x55</code> sync, LEN, CRC16</td>
+    <td>both radios</td>
+  </tr>
+  <tr>
+    <td>Metadata</td>
+    <td><code>sequence, timestamp_ms, boot_epoch, state, m4_errors, m7_errors, flags</code></td>
+    <td>both radios</td>
+  </tr>
+  <tr>
+    <td><strong>Tier 1</strong></td>
+    <td>Primary sensors</td>
+    <td><code>temperature, pressure, humidity, altitude_baro</code> (BME688 M4) + <code>temperature2, pressure2</code> (Nicla)</td>
+    <td>LoRa + APC220</td>
+  </tr>
+  <tr>
+    <td><strong>Tier 2</strong></td>
+    <td>GPS / secondary</td>
+    <td><code>latitude, longitude, altitude_gps, speed_ms, heading, gps_satellites, gps_fix</code></td>
+    <td>LoRa + APC220</td>
+  </tr>
+  <tr>
+    <td><strong>Tier 3</strong></td>
+    <td>Full sensor detail</td>
+    <td>gas resistance, raw IMU, extended Nicla data</td>
+    <td>SD card only — never transmitted</td>
+  </tr>
+</table>
+
+<div class="note note-warn">
+  <strong>LoRa TX status:</strong> M7 Vision Shield LoRa AT TX commands are unsupported — LoRa TX in the M7 flight build is currently disabled.
+  Active LoRa downlink is M4 RFM95W (SPI) → MKR WAN 1310 ground station.
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- FIRMWARE ENVIRONMENTS                                                   -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<h2>Firmware Environments (platformio.ini)</h2>
+
+<table>
+  <tr><th>Environment</th><th>Board</th><th>Role</th><th>Flash method</th></tr>
+  <tr><td><code>cansat_m7</code></td><td>Portenta H7 M7</td><td>Main flight firmware (M7 core)</td><td>PlatformIO</td></tr>
+  <tr><td><code>cansat_m4</code></td><td>Portenta H7 M4</td><td>Sensor + LoRa TX (M4 core)</td><td>PlatformIO</td></tr>
+  <tr><td><code>cansat_nicla</code></td><td>Nicla Sense ME</td><td>BHI260AP standalone BLE sensor hub</td><td>Arduino IDE only (Mbed OS Nicla Boards pkg)</td></tr>
+  <tr><td><code>groundstation_1310</code></td><td>MKR WAN 1310</td><td>LoRa RX + CSV output</td><td>PlatformIO</td></tr>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- FOOTER                                                                  -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="doc-footer">
+  <span>Southern Lights CanSat 2026</span>
+  <span>See also: <code>docs/h7_pinout.md</code></span>
+  <span>2026-03-22</span>
+</div>
+
+</body>
+</html>

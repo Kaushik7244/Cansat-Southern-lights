@@ -1,24 +1,59 @@
 # Portenta H7 — CanSat Pin Assignment Map
 
 **Board:** Arduino Portenta H7 + Vision Shield LoRa
-**As of:** 2026-03-16
+**As of:** 2026-03-22
 
 ---
 
-## UART / Serial — all 3 hardware ports occupied
+## UART / Serial
 
-| Port | STM32 pins | Arduino | Role | Device | Baud |
-|------|-----------|---------|------|--------|------|
-| Serial1 | PA9 (TX) / PA10 (RX) | — | APC220 433 MHz radio | telemetry.cpp | 9600 |
-| Serial2 | PA15 (TX) / PF6 (RX) | — | Grove Air530 GPS | gps.h `GPS_SERIAL` | 9600 |
-| Serial3 / SerialLoRa | PJ8 (TX) / PJ9 (RX) | — | Vision Shield Murata LoRa (HD connector) | MKRWAN library | 19200 8E1 |
+| Port | STM32 pins | Role | Device | Baud | Notes |
+|------|-----------|------|--------|------|-------|
+| SerialLoRa | PJ8 (TX) / PJ9 (RX) | Vision Shield Murata LoRa | MKRWAN library (M7) | 19200 8E1 | HD connector only — modem responds to `lora.begin()` but AT TX commands unsupported; LoRa TX disabled in flight build |
 
-> **Serial3/SerialLoRa is on the HD (High-Density) connector** — not on the breakout header.
-> PA15 and PF6 are available on the H7 breakout header for GPS wiring tomorrow.
+> APC220 and GPS are **no longer on hardware UARTs**. Both are routed through the DFRobot IIC-UART module (WK2132) on I2C — see section below.
 
 ---
 
-## Vision Shield — control pins (managed by MKRWAN library)
+## IIC-UART — DFRobot WK2132 (DFR0627) @ I2C addr 0x10
+
+Both UART channels share one WK2132 chip on Wire (I2C3, ESLOV/Qwiic connector).
+DIP switch: A1=GND, A0=GND → address 0x10.
+
+| Channel | Object | Role | Device | Baud |
+|---------|--------|------|--------|------|
+| UART_1 | `iic_apc` | Telemetry downlink | APC220 433 MHz radio | 9600 |
+| UART_2 | `iic_gps` | GNSS | Grove Air530 GPS | 9600 |
+
+---
+
+## I2C
+
+| Bus | STM32 pins | Arduino object | Devices | Notes |
+|-----|-----------|---------------|---------|-------|
+| I2C3 | PH7 (SCL) / PH8 (SDA) | `Wire` | WK2132 (DFR0627) @ 0x10 — 2× UART bridge (APC220 + GPS) | ESLOV / Qwiic connector |
+| I2C1 | — (internal) | `Wire1` | PMIC, fuel gauge, crypto | No external pins — not accessible from breakout header |
+
+---
+
+## SPI — M4 core only
+
+SPI is used exclusively by M4. Both devices share the same bus with independent CS lines.
+
+| Arduino pin | STM32 pin | Role | Device |
+|------------|----------|------|--------|
+| D7 | PI_0 | `BME_CS` — BME688 chip select | BME688 environmental sensor |
+| D6 | PA_8 | `LORA_NSS` — RFM95W chip select | RFM95W 868 MHz LoRa |
+| D5 | PC_6 | `LORA_DIO0` | RFM95W |
+| D4 | PC_7 | `LORA_RESET` | RFM95W |
+
+LoRa config: 868 MHz, SF9, BW125, CR4/5, +17 dBm, sync word 0x12.
+
+> MOSI/MISO/SCK are the standard H7 SPI pins on the breakout header.
+
+---
+
+## Vision Shield — control pins (managed by MKRWAN library, M7)
 
 | Pin | Role |
 |-----|------|
@@ -30,21 +65,14 @@ These are driven automatically by `lora.begin()` — do not use for anything els
 
 ---
 
-## I2C
+## PWM / Servo — M7 core
 
-| Bus | STM32 pins | Arduino object | Role | Device |
-|-----|-----------|---------------|------|--------|
-| I2C3 | PH7 (SCL) / PH8 (SDA) | `Wire` | BME688 environmental sensor | M4 core, addr 0x77 |
-| I2C1 | — (HD connector) | `Wire1` | Reserved (was Nicla ESLOV) | **Nicla now BLE — Wire1 free in practice** |
+| STM32 pin | Role |
+|----------|------|
+| PH_15 | `SERVO_PIN_LEFT` — left brake servo |
+| PK_1 | `SERVO_PIN_RIGHT` — right brake servo |
 
----
-
-## PWM / Servo
-
-| Arduino pin | Role |
-|------------|------|
-| D4 | `SERVO_PIN_LEFT` — left brake servo |
-| D5 | `SERVO_PIN_RIGHT` — right brake servo |
+Both servos default to 90° neutral at boot.
 
 ---
 
@@ -52,57 +80,8 @@ These are driven automatically by `lora.begin()` — do not use for anything els
 
 | Protocol | Device | Notes |
 |----------|--------|-------|
-| BLE | Nicla Sense ME | Connects via BHY2Host BLE — no wires from H7 |
-| WiFi | Internal (H7 onboard) | Used at boot for NTP; powered down after |
-
----
-
-## Free pins — available for new wiring
-
-All standard breakout header pins **not listed above** are unassigned.
-Confirmed free candidates for the MKR WAN 1310 UART bridge:
-
-| STM32 pin | Arduino pin | Notes |
-|-----------|------------|-------|
-| PA0 | D0 | UART4_TX — mbed `BufferedSerial(PA_0, PA_1)` |
-| PA1 | D1 | UART4_RX |
-| PA2 | D2 | UART2_TX alternative |
-| PA3 | D3 | UART2_RX alternative |
-
-> PA0/PA1 are **not exposed as `Serial4`** in the Arduino framework for Portenta H7.
-> Access them via mbed: `mbed::BufferedSerial lora_uart(PA_0, PA_1, 9600);`
-> Or use SoftwareSerial as a fallback (lower throughput, but sufficient for LoRa packet rate).
-
----
-
-## 4th UART — MKR WAN 1310 bridge (design option)
-
-Goal: H7 → UART → 1310 (CanSat) → LoRa → 1310 (ground station)
-
-**Option A — mbed UART4 (recommended)**
-- PA0 (TX from H7) → RX on 1310
-- PA1 (RX on H7) → TX from 1310
-- Use `mbed::BufferedSerial` or `arduino::UART` at 9600 baud
-- 1310 firmware: receive UART packet from H7, transmit over LoRa (sandeepmistry/LoRa)
-- H7 side: `lora_uart.write(frame, len)` after framing telemetry packet
-
-**Option B — SoftwareSerial on any free GPIO**
-- Works, but max ~19200 baud, no DMA
-- Sufficient for 1 Hz telemetry packets
-
----
-
-## Physical wiring to add tomorrow
-
-| Wire | From | To | Notes |
-|------|------|----|-------|
-| GPS TX | Air530 TX | PA15 on H7 header | Yellow |
-| GPS RX | Air530 RX | PF6 on H7 header | White |
-| GPS VCC | 3.3 V | Air530 VCC | Red |
-| GPS GND | GND | Air530 GND | Black |
-
-> Serial2 uses PA15 (TX from H7) and PF6 (RX into H7).
-> Grove Air530 is a 3.3 V device — do not connect to 5 V.
+| BLE | Nicla Sense ME | BHY2Host BLE — no wires from H7; barometer, temperature, orientation |
+| WiFi | Internal (H7 onboard) | Disabled in flight build (`WIFI_ENABLED = false`) |
 
 ---
 
@@ -110,9 +89,10 @@ Goal: H7 → UART → 1310 (CanSat) → LoRa → 1310 (ground station)
 
 | Resource | Used | Free |
 |----------|------|------|
-| UART | 3 / 3 standard | 1× via mbed UART4 (PA0/PA1) |
-| I2C | 1 active (Wire, M4) | Wire1 free |
-| SPI | 0 (Vision Shield SPI not routed to H7 SPI pins) | Full SPI available on header |
-| PWM | D4, D5 (servos) | Many remaining |
-| BLE | 1 (Nicla) | — |
-| WiFi | 1 (boot NTP) | — |
+| UART (hardware) | 1 (SerialLoRa — Vision Shield, TX disabled) | Serial1, Serial2, Serial3 on breakout header |
+| IIC-UART | 2 channels (APC220, GPS) via WK2132 | — |
+| I2C | Wire: WK2132 @ 0x10 (2× UART bridge) | Wire1 internal only |
+| SPI | D4–D7 (BME688 + RFM95W on M4) | Full SPI available on M7 side |
+| PWM | PH_15, PK_1 (servos) | Many remaining |
+| BLE | 1 (Nicla Sense ME) | — |
+| WiFi | Disabled | — |
