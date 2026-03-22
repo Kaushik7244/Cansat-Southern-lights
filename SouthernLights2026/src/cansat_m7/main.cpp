@@ -404,8 +404,24 @@ void navigationSetup()
     // The Nicla must be running cansat_nicla firmware (NICLA_STANDALONE mode),
     // advertising as "NICLA". begin() blocks until the device is found — power
     // the Nicla before the Portenta reaches this point.
-    Serial.print("Nicla Sense (BLE) connecting... ");
-    if (BHY2Host.begin(false, NICLA_VIA_BLE)) {
+    // Nicla is powered by H7 so both boot simultaneously.
+    // BHY2.begin() on Nicla (red LED phase) takes ~8-10 s before it starts advertising.
+    // Wait here to let it finish before scanning.
+    Serial.print("Nicla Sense (BLE) connecting... waiting for Nicla boot... ");
+    delay(10000);
+
+    // Retry BLE scan up to 3 times in case first attempt still races.
+    bool nicla_found = false;
+    for (int attempt = 1; attempt <= 3 && !nicla_found; attempt++) {
+        if (attempt > 1) {
+            Serial.print("retry ");
+            Serial.print(attempt);
+            Serial.print("... ");
+            delay(3000);
+        }
+        nicla_found = BHY2Host.begin(false, NICLA_VIA_BLE);
+    }
+    if (nicla_found) {
         nicla_barometer.begin(10, 0);
         nicla_temp.begin(10, 0);
         nicla_ori.begin(10, 0);
