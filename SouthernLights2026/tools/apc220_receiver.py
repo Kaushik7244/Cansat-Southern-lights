@@ -240,7 +240,7 @@ def run(port: str, baud: int) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    port = sys.argv[1] if len(sys.argv) > 1 else 'COM14'
+    port = sys.argv[1] if len(sys.argv) > 1 else 'COM7'
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else 9600
     try:
         run(port, baud)

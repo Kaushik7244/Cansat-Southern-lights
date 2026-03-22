@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SouthernLights 2026 — M7 Main Loop Flowchart</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f8f9fb;
+      color: #1a1a2e;
+      padding: 32px 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 3px solid #2563eb;
+      padding-bottom: 14px;
+      margin-bottom: 28px;
+    }
+
+    header h1 {
+      font-size: 1.55rem;
+      font-weight: 700;
+      color: #1e3a8a;
+    }
+
+    header .meta {
+      font-size: 0.82rem;
+      color: #64748b;
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #1e3a8a;
+      margin-bottom: 10px;
+      border-left: 4px solid #2563eb;
+      padding-left: 10px;
+    }
+
+    p.desc {
+      font-size: 0.88rem;
+      color: #475569;
+      margin-bottom: 18px;
+      line-height: 1.55;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.09);
+      padding: 24px 28px;
+      margin-bottom: 28px;
+    }
+
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+
+    /* Timing table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      margin-top: 6px;
+    }
+
+    th {
+      background: #1e3a8a;
+      color: #fff;
+      padding: 9px 14px;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    td {
+      padding: 8px 14px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:nth-child(even) td { background: #f1f5f9; }
+
+    .badge {
+      display: inline-block;
+      background: #dbeafe;
+      color: #1e40af;
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    footer {
+      border-top: 1px solid #e2e8f0;
+      margin-top: 10px;
+      padding-top: 14px;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      text-align: center;
+    }
+
+    @media print {
+      body { background: #fff; padding: 20px; }
+      .card { box-shadow: none; border: 1px solid #e2e8f0; }
+      .no-print { display: none; }
+      /* Try to keep each card on one page */
+      .card { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>SouthernLights 2026 — CanSat M7 Firmware</h1>
+    <div style="font-size:0.9rem;color:#2563eb;margin-top:4px;">Main Loop &amp; Navigation State Machine — Flowchart Reference</div>
+  </div>
+  <div class="meta">
+    Branch: PlatformIO<br/>
+    File: src/cansat_m7/main.cpp<br/>
+    Generated: 2026-03-18
+  </div>
+</header>
+
+<!-- ── SECTION 1: Main Loop ── -->
+<div class="card">
+  <h2>1 — Main Loop  <span class="badge">loop()</span></h2>
+  <p class="desc">
+    The M7 core runs a non-blocking cooperative loop. Each iteration reads the current
+    timestamp (<code>millis()</code>) and dispatches work to timed sub-tasks.
+    The loop never calls <code>delay()</code> — all tasks are guarded by elapsed-time checks.
+  </p>
+  <div class="mermaid">
+flowchart TD
+    START([loop start]) --> NOW[now_ms = millis]
+
+    NOW --> RPC["Forward M4 RPC output\nto USB Serial"]
+
+    RPC --> APC{"APC_ENABLED &&\nAPC_SERIAL.available?"}
+    APC -- "TIME:&lt;epoch&gt;" --> TIMESYNC["storageSetBootEpoch\n(time sync via APC220)"]
+    APC -- DUMP --> DUMP["RPC.call('DumpM4Log')"]
+    APC -- no data --> NICLA_CHK
+    TIMESYNC --> NICLA_CHK
+    DUMP --> NICLA_CHK
+
+    NICLA_CHK{"nicla_active &&\nnow − last_nicla ≥ 200 ms?"}
+    NICLA_CHK -- yes --> NICLA["niclaUpdate()"]
+    NICLA_CHK -- no  --> GPS
+    NICLA --> GPS
+
+    GPS["gpsPoll(g_packet)\n(non-blocking — fills g_packet.secondary)"]
+    GPS --> GPS_DBG{"no fix &&\nnow − last_status ≥ 5 s?"}
+    GPS_DBG -- yes --> GDBG["gpsDebugStatus()"]
+    GPS_DBG -- no  --> NAV
+    GDBG --> NAV
+
+    NAV["navigationUpdate()\n(state machine + servo control)"]
+
+    NAV --> TX_CHK{"now − last_tx\n≥ 1 000 ms?"}
+    TX_CHK -- yes --> TX_TICK["sequence++\ntimestamp_ms = now\npush snapshot → g_ring"]
+    TX_TICK --> TELEM["telemetrySend(g_packet)"]
+    TELEM --> DBGPRINT["printPacketToSerial()\n[SLDEBUG only]"]
+    DBGPRINT --> SD_CHK
+
+    TX_CHK -- no --> SD_CHK
+
+    SD_CHK{"now − last_drain\n≥ 10 000 ms?"}
+    SD_CHK -- yes --> DRAIN["storageDrain(g_packet)\n(flush ring buffer → SD card)"]
+    SD_CHK -- no  --> END
+    DRAIN --> END
+
+    END([loop end → restart])
+  </div>
+</div>
+
+<!-- ── SECTION 2: niclaUpdate ── -->
+<div class="card">
+  <h2>2 — Nicla Sensor Update  <span class="badge">niclaUpdate()</span>  — runs every 200 ms</h2>
+  <p class="desc">
+    Polls the Nicla Sense ME over BLE, applies outlier rejection, derives yaw from the
+    orientation quaternion, and maintains a relative barometric altitude reference.
+  </p>
+  <div class="mermaid">
+flowchart TD
+    N1([niclaUpdate]) --> N2["BHY2Host.update()\n(processes pending BLE notifications)"]
+    N2 --> N3["Read nicla_temp.value()\nRead nicla_barometer.value() ÷ 100 → hPa"]
+    N3 --> N4{"T2 in −50 … 85 °C\nP2 in 300 … 1100 hPa?"}
+    N4 -- pass --> N5["Update g_packet.primary\ntemperature2 / pressure2"]
+    N4 -- reject --> N6["Discard (corrupt BLE packet)"]
+    N5 --> N7["Quaternion → yaw_deg\natan2(2·(w·z + x·y), 1 − 2·(y²+z²))"]
+    N6 --> N7
+    N7 --> N8{"!alt_init &&\npressure2 > 0?"}
+    N8 -- yes --> N9["alt = Altitude(T2, 0, P2)\nalt_init = true\n(sets reference sea-level pressure)"]
+    N8 -- no  --> N10
+    N9 --> N10{"alt_init?"}
+    N10 -- yes --> N11["nicla_altitude = alt.get_alt(T2, P2)"]
+    N10 -- no  --> NEND
+    N11 --> NEND([return])
+  </div>
+</div>
+
+<!-- ── SECTION 3: navigationUpdate ── -->
+<div class="card">
+  <h2>3 — Navigation State Machine  <span class="badge">navigationUpdate()</span>  — runs every loop</h2>
+  <p class="desc">
+    Advances the flight state and controls the two parafoil brake servos.
+    State transitions are one-way and altitude-triggered. Checkpoint navigation
+    is active only during descent with a valid GPS fix.
+  </p>
+  <div class="mermaid">
+flowchart TD
+    NA([navigationUpdate]) --> NA1{"alt_init?"}
+    NA1 -- no  --> NAEND([return — not ready])
+    NA1 -- yes --> NA2{"state == PAD &&\naltitude > 10 m?"}
+    NA2 -- yes --> NA3["state = STATE_ASCENT"]
+    NA2 -- no  --> NA4
+    NA3 --> NA4
+
+    NA4{"!crossed_500 &&\naltitude > 480 m?"}
+    NA4 -- yes --> NA5["crossed_500 = true\nstate = STATE_APOGEE"]
+    NA4 -- no  --> NA6
+    NA5 --> NA6
+
+    NA6{"crossed_500 &&\n!parachute_deployed &&\naltitude < 60 m?"}
+    NA6 -- yes --> NA7["parachute_deployed = true\nstate = STATE_DESCENT\nleft servo → 180°  right servo → 0°\n(brakes open / neutral)"]
+    NA6 -- no  --> NA8
+    NA7 --> NA8
+
+    NA8{"parachute_deployed &&\n!flight_end &&\ngps_fix?"}
+    NA8 -- no  --> NA14
+    NA8 -- yes --> NA9{"checkpoint valid\n(x≠0, y≠0, idx<99)?"}
+
+    NA9 -- yes --> NA10["Calc_dist(lon, lat)"]
+    NA10 --> NA11{"dist ≤ 5 m?"}
+    NA11 -- yes --> NA12["checkpoints_counter++\nTarget = next checkpoint"]
+    NA11 -- no  --> NA13
+    NA12 --> NA13
+
+    NA13["Calc_desired_heading(yaw, lon, lat)\n× TURNING_RATE (0.8)\nconstrain to ±100\nmap to brake angle 0–90°\nwrite brake servos"]
+    NA13 --> NA14
+
+    NA9 -- no / exhausted --> NA9B["flight_end = true\nhold last checkpoint\n(checkpoints_counter--)"]
+    NA9B --> NA14
+
+    NA14{"flight_end &&\naltitude < 6 m &&\nstate ≠ LANDED?"}
+    NA14 -- yes --> NA15["state = STATE_LANDED\nRPC.call('DumpM4Log')"]
+    NA14 -- no  --> NAEND2
+    NA15 --> NAEND2([return])
+  </div>
+</div>
+
+<!-- ── SECTION 4: Timing summary ── -->
+<div class="card">
+  <h2>4 — Loop Timing Summary</h2>
+  <p class="desc">All tasks are non-blocking. The loop itself runs as fast as possible (~every few ms); each task is rate-limited by its own elapsed-time guard.</p>
+  <table>
+    <thead>
+      <tr><th>Task</th><th>Function</th><th>Interval</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>M4 serial forward</td><td><code>RPC.available() / read()</code></td><td>Every iteration</td><td>Drains M4 print buffer</td></tr>
+      <tr><td>APC220 ground commands</td><td>APC_SERIAL read</td><td>Every iteration</td><td>TIME sync &amp; DUMP commands</td></tr>
+      <tr><td>Nicla Sense ME poll</td><td><code>niclaUpdate()</code></td><td>200 ms (5 Hz)</td><td>BLE notifications arrive at 10 Hz</td></tr>
+      <tr><td>GPS poll</td><td><code>gpsPoll()</code></td><td>Every iteration</td><td>Non-blocking UART parse</td></tr>
+      <tr><td>GPS debug status</td><td><code>gpsDebugStatus()</code></td><td>5 s (no-fix only)</td><td>SLDEBUG mode only</td></tr>
+      <tr><td>Navigation &amp; servos</td><td><code>navigationUpdate()</code></td><td>Every iteration</td><td>State transitions are altitude-gated</td></tr>
+      <tr><td>Telemetry transmit</td><td><code>telemetrySend()</code></td><td>1 000 ms (1 Hz)</td><td>Also pushes snapshot to ring buffer</td></tr>
+      <tr><td>SD card flush</td><td><code>storageDrain()</code></td><td>10 000 ms (0.1 Hz)</td><td>Writes ring buffer → CSV on SD</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ── SECTION 5: Flight State Summary ── -->
+<div class="card">
+  <h2>5 — Flight State Transitions</h2>
+  <p class="desc">States are stored in <code>g_packet.state</code> and are strictly one-way.</p>
+  <div class="mermaid">
+stateDiagram-v2
+    direction LR
+    [*]       --> PAD      : boot
+    PAD       --> ASCENT   : altitude > 10 m
+    ASCENT    --> APOGEE   : altitude > 480 m
+    APOGEE    --> DESCENT  : altitude &lt; 60 m\n(deploys brakes)
+    DESCENT   --> LANDED   : flight_end &&\naltitude &lt; 6 m
+    LANDED    --> [*]      : DumpM4Log called
+  </div>
+</div>
+
+<footer>
+  SouthernLights CanSat 2026 — Portenta H7 M7 Core &nbsp;|&nbsp;
+  src/cansat_m7/main.cpp &nbsp;|&nbsp;
+  For internal team use
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: { curve: 'orthogonal', useMaxWidth: true },
+    themeVariables: {
+      primaryColor:       '#dbeafe',
+      primaryTextColor:   '#1e3a8a',
+      primaryBorderColor: '#2563eb',
+      lineColor:          '#2563eb',
+      secondaryColor:     '#f1f5f9',
+      tertiaryColor:      '#fff',
+      fontSize:           '13px'
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,20 +1,34 @@
 # Portenta H7 — CanSat Pin Assignment Map
 
 **Board:** Arduino Portenta H7 + Vision Shield LoRa
-**As of:** 2026-03-16
+**As of:** 2026-03-18
 
 ---
 
 ## UART / Serial — all 3 hardware ports occupied
 
+> ⚠️ **Temporary bench configuration** — GPS is on Serial1 while APC220 is disconnected.
+> `APC_ENABLED` is commented out in `hw_config.h`. See normal flight config below.
+
+### Current (bench / GPS-only testing)
+
 | Port | STM32 pins | Arduino | Role | Device | Baud |
 |------|-----------|---------|------|--------|------|
-| Serial1 | PA9 (TX) / PA10 (RX) | — | APC220 433 MHz radio | telemetry.cpp | 9600 |
-| Serial2 | PA15 (TX) / PF6 (RX) | — | Grove Air530 GPS | gps.h `GPS_SERIAL` | 9600 |
+| Serial1 | PA9 (TX) / PA10 (RX) | D13 / D14 | **Grove Air530 GPS (temporary)** | `hw_config.h GPS_SERIAL` | 9600 |
+| Serial2 | PA15 (TX) / PF6 (RX) | — | *(unused — normal GPS port)* | — | — |
 | Serial3 / SerialLoRa | PJ8 (TX) / PJ9 (RX) | — | Vision Shield Murata LoRa (HD connector) | MKRWAN library | 19200 8E1 |
 
+### Normal flight configuration
+
+| Port | STM32 pins | Arduino | Role | Device | Baud |
+|------|-----------|---------|------|--------|------|
+| Serial1 | PA9 (TX) / PA10 (RX) | D13 / D14 | APC220 433 MHz radio | `hw_config.h APC_SERIAL` | 9600 |
+| Serial2 | PA15 (TX) / PF6 (RX) | — | Grove Air530 GPS | `hw_config.h GPS_SERIAL` | 9600 |
+| Serial3 / SerialLoRa | PJ8 (TX) / PJ9 (RX) | — | Vision Shield Murata LoRa (HD connector) | MKRWAN library | 19200 8E1 |
+
+To restore flight config: in `hw_config.h` change `GPS_SERIAL` to `Serial2` and uncomment `#define APC_ENABLED`.
+
 > **Serial3/SerialLoRa is on the HD (High-Density) connector** — not on the breakout header.
-> PA15 and PF6 are available on the H7 breakout header for GPS wiring tomorrow.
 
 ---
 
@@ -92,16 +106,26 @@ Goal: H7 → UART → 1310 (CanSat) → LoRa → 1310 (ground station)
 
 ---
 
-## Physical wiring to add tomorrow
+## Physical wiring — GPS
+
+### Current (bench): GPS on Serial1 (D13/D14)
 
 | Wire | From | To | Notes |
 |------|------|----|-------|
-| GPS TX | Air530 TX | PA15 on H7 header | Yellow |
-| GPS RX | Air530 RX | PF6 on H7 header | White |
-| GPS VCC | 3.3 V | Air530 VCC | Red |
+| GPS TX | Air530 TX | PA10 / D14 on H7 header | RX into H7 |
+| GPS RX | Air530 RX | PA9  / D13 on H7 header | TX from H7 |
+| GPS VCC | 3.3 V | Air530 VCC | Red — 3.3 V only |
 | GPS GND | GND | Air530 GND | Black |
 
-> Serial2 uses PA15 (TX from H7) and PF6 (RX into H7).
+### Flight: GPS on Serial2 (PA15/PF6)
+
+| Wire | From | To | Notes |
+|------|------|----|-------|
+| GPS TX | Air530 TX | PF6  on H7 header | RX into H7 |
+| GPS RX | Air530 RX | PA15 on H7 header | TX from H7 |
+| GPS VCC | 3.3 V | Air530 VCC | Red — 3.3 V only |
+| GPS GND | GND | Air530 GND | Black |
+
 > Grove Air530 is a 3.3 V device — do not connect to 5 V.
 
 ---

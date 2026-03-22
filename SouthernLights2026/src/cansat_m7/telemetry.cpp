@@ -102,6 +102,7 @@ bool telemetryInit(SensorPacket& g_packet) {
     // APC220 — port and baud set in hw_config.h
 #ifdef APC_ENABLED
     APC_SERIAL.begin(APC_BAUD);
+    APC_SERIAL.setTimeout(50);   // prevent readStringUntil from stalling main loop
     g_apc_ok = true;
     g_packet.m7_errors += 0;   // APC220 has no init handshake to verify
 #else

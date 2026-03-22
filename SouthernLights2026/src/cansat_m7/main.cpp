@@ -14,6 +14,7 @@
 #include <RPC.h>
 #include <time.h>
 #include <Arduino_BHY2Host.h>
+#include <rtos.h>
 #include <Servo.h>
 #include "data_types.h"
 #include "storage.h"
@@ -113,6 +114,19 @@ volatile uint8_t g_ring_head = 0;
 uint8_t          g_ring_tail = 0;
 
 // ---------------------------------------------------------------------------
+// Nicla BLE thread — keeps BHY2Host.update() off the main loop so a BLE
+// stall cannot freeze GPS, telemetry, or the flight state machine.
+// ---------------------------------------------------------------------------
+static rtos::Thread nicla_thread;
+
+static void niclaThreadFn() {
+    while (true) {
+        if (nicla_active) BHY2Host.update();
+        rtos::ThisThread::sleep_for(50);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Loop timing
 // ---------------------------------------------------------------------------
 static uint32_t g_last_tx_ms         = 0;
@@ -155,7 +169,7 @@ void setup()
    
 
     Serial.begin(115200);
-    { unsigned long _t = millis(); while (!Serial && millis() - _t < 2000) ; }
+    { unsigned long _t = millis(); while (!Serial && millis() - _t < 3000) ; }
     Serial.println("USB Serial up at 115200");
 
     // RPC must start before WiFi so M4 can begin sending sensor data
@@ -418,10 +432,11 @@ void navigationSetup()
         }
         nicla_active = (nicla_temp.value() != 0.0f);
         Serial.println(nicla_active ? "OK" : "connected but no data yet — continuing");
+        nicla_thread.start(niclaThreadFn);   // BLE polling moved off main loop
         Serial.println("Waiting for initial magnometer calibration (Do not move) ");
         delay(5000);
         Serial.println("Initail magnometer calibration complete. Please calibrate for 40 seconds before launch (rotate slowly cansat in various directions)");
-        
+
     } else {
         Serial.println("FAILED — Nicla not found over BLE");
 
@@ -442,10 +457,8 @@ void navigationSetup()
 
 void niclaUpdate()
 {
-    // update() calls BLE.poll() which processes any pending BLE notifications
-    // from the Nicla. Sensor values are updated by the notification callbacks —
-    // read .value() immediately after.
-    BHY2Host.update();
+    // BHY2Host.update() runs in niclaThreadFn — not called here to avoid
+    // blocking the main loop on a BLE stall.
 
     // Always read latest values — returns 0.0 until Nicla sends its first packet.
     float t2 = nicla_temp.value();
