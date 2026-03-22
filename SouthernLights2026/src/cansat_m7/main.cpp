@@ -41,6 +41,12 @@
 const int ON  = LOW;
 const int OFF = HIGH;
 
+static void ledSet(bool r, bool g, bool b) {
+    digitalWrite(LEDR, r ? ON : OFF);
+    digitalWrite(LEDG, g ? ON : OFF);
+    digitalWrite(LEDB, b ? ON : OFF);
+}
+
 // ---------------------------------------------------------------------------
 // WiFi
 // ---------------------------------------------------------------------------
@@ -57,7 +63,7 @@ int  WiFistatus = WL_IDLE_STATUS;
 #define SERVO_PIN_RIGHT PK_1
 #define LEFT_NEUTRAL 90 
 #define RIGHT_NEUTRAL 90
-#define altitude_sim true
+#define altitude_sim false
 static const float TURNING_RATE  = 0.8f;
 
 Servo break_left;
@@ -93,7 +99,7 @@ int              landing_wp_counter  = 0;      // loops 0→1→2→0→1→...
 Altitude alt;
 float    nicla_altitude = 0.0f;
 float    yaw_deg        = 0.0f;
-bool     nicla_active   = false;   // set true only when BHY2Host init succeeded
+volatile bool nicla_active = false;
 bool     alt_init       = false;
 bool     flight_end     = false;
 
@@ -115,11 +121,14 @@ uint8_t          g_ring_tail = 0;
 // ---------------------------------------------------------------------------
 // Loop timing
 // ---------------------------------------------------------------------------
+static bool          g_iic_uart_ok        = false;  // false → skip GPS poll / telemetry to avoid I2C timeout stalls
+static volatile bool g_nicla_ble_connected = false;
 static uint32_t g_last_tx_ms         = 0;
 static uint32_t g_last_drain_ms      = 0;
 static uint32_t g_last_nicla_ms      = 0;
 static uint32_t g_last_gps_ms        = 0;
 static uint32_t g_last_gps_status_ms = 0;
+static uint32_t g_nicla_last_data_ms = 0;   // millis() of last valid Nicla temperature reading
 static const uint32_t TX_INTERVAL_MS         = 1000;   // transmit every 1 s
 static const uint32_t DRAIN_INTERVAL_MS      = 10000;  // flush SD every 10 s
 static const uint32_t NICLA_INTERVAL_MS      = 200;    // poll Nicla at 5 Hz
@@ -130,15 +139,55 @@ static const uint32_t GPS_STATUS_INTERVAL_MS = 5000;   // GPS acquisition status
 // Forward declarations
 // ---------------------------------------------------------------------------
 void navigationSetup();
-void niclaUpdate();
+bool niclaUpdate();
 void navigationUpdate();
 void printPacketToSerial();
 void setH4CoreLoop(long mcl);
 void UpdateSensorPackage(float temperature, float pressure, float humidity,
                          float gasresistance, float altitude);
 void M4Error();
+GPSReply getGPSDataForM4();
 void printWifiStatus();
 static void configTime(int gmtOffset_sec, int daylightOffset_sec, const char *ntpServer);
+
+
+// ---------------------------------------------------------------------------
+// Nicla BLE background thread
+//
+// BHY2Host.update() → BLE.poll(5ms timeout) is called here at 20 Hz so BLE
+// events are drained promptly and never accumulate.  Running it in a separate
+// RTOS thread keeps it off the main loop, preventing contention with OpenAMP
+// RPC dispatch when M4 fires UpdateSensorPackage.
+// BLE.poll(5) caps worst-case blocking per call to 5 ms, so priority
+// inheritance from the HCI RX thread can only starve the main loop for ≤5 ms.
+// ---------------------------------------------------------------------------
+// osPriorityIdle: runs only when main loop + RPC threads are idle.
+// BLE.poll(5) caps HCI mutex blocking to 5 ms per call, but priority-inheritance
+// can still briefly boost this thread.  Idle priority ensures it can never starve
+// the main loop or OpenAMP RPC dispatch regardless of BLE event timing.
+static rtos::Thread nicla_ble_thread(osPriorityIdle, 8192, nullptr, "nicla_ble");
+
+static void niclaUpdateThread()
+{
+    // Startup delay — allow OpenAMP virtqueue channels to fully initialise before
+    // any BLE HCI activity begins.  BHY2Host.update() competing with the first
+    // M4→M7 UpdateSensorPackage virtual-queue init causes a hang at TX#2.
+    // 8 s covers the ~2–3 M4 RPC cycles needed to stabilise the shared-memory link.
+    delay(8000);
+
+    while (true) {
+        if (nicla_active) {
+            BHY2Host.update();
+            g_nicla_ble_connected = BHY2Host.connected();
+            if (!g_nicla_ble_connected) {
+                nicla_active = false;
+                g_packet.flags &= ~FLAG_NICLA_BLE_OK;
+                Serial.println("Nicla: BLE disconnected — holding last sensor values");
+            }
+        }
+        delay(50);  // 20 Hz
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -149,9 +198,7 @@ void setup()
     pinMode(LEDR, OUTPUT);
     pinMode(LEDG, OUTPUT);
     pinMode(LEDB, OUTPUT);
-    digitalWrite(LEDR, ON);   // red = booting
-    digitalWrite(LEDG, OFF);
-    digitalWrite(LEDB, OFF);
+    ledSet(true, false, false);  // RED: RPC init
    
 
     Serial.begin(115200);
@@ -164,10 +211,10 @@ void setup()
     RPC.bind("setH4CoreLoop",       setH4CoreLoop);
     RPC.bind("UpdateSensorPackage", UpdateSensorPackage);
     RPC.bind("M4Error",             M4Error);
+    // getGPSData RPC removed — struct returns via OpenAMP caused shared-memory issues
     Serial.println("OK");
 
-    digitalWrite(LEDR, OFF);
-    digitalWrite(LEDB, ON);   // blue = network/NTP in progress
+    ledSet(true, true, false);   // YELLOW: peripheral init (SD, radios, GPS)
 
 #ifndef ISOLATION_TEST
     if (WIFI_ENABLED) {
@@ -218,7 +265,8 @@ void setup()
 
     // DFRobot IIC to Dual UART — must init before GPS and telemetry
     Serial.print("IIC-UART init... ");
-    if (!iicUartInit()) {
+    g_iic_uart_ok = iicUartInit();
+    if (!g_iic_uart_ok) {
         Serial.println("WARNING — one or both IIC-UART channels failed");
         g_packet.m7_errors++;
     }
@@ -268,9 +316,7 @@ void setup()
     Serial.println("ISOLATION_TEST: M4 kept idle");
 #endif
 
-    digitalWrite(LEDR, OFF);
-    digitalWrite(LEDG, ON);   // green = ready
-    digitalWrite(LEDB, OFF);
+    ledSet(false, true, false);  // GREEN: boot complete — all systems go
 
 
 
@@ -322,23 +368,36 @@ void loop()
 #endif  // APC_ENABLED
 #endif  // ISOLATION_TEST
 
-    // Nicla Sense — poll BLE at 5 Hz. Sensor data arrives at 10 Hz via BLE notifications;
-    // 200 ms polling interval is sufficient for navigation updates.
+    // Deferred nicla_ble_thread start — wait until M4 has sent its first real BME data.
+    // Starting the thread during setup races with the OpenAMP first-message initialisation
+    // of the M4→M7 UpdateSensorPackage virtqueue channel and causes a hang at TX#2.
+    // g_packet.primary.temperature is 0.0 until M4 reports; non-zero means M4 is live.
+    static bool s_ble_thread_started = false;
+    if (!s_ble_thread_started && nicla_active && g_packet.primary.temperature != 0.0f) {
+        nicla_ble_thread.start(niclaUpdateThread);
+        s_ble_thread_started = true;
+        Serial.println("Nicla: BLE thread started (M4 data confirmed)");
+    }
+
+    // Nicla Sense — read cached sensor values at 5 Hz.
+    // BHY2Host.update() runs in nicla_ble_thread (20 Hz) so the main loop
+    // never calls any BLE API and cannot be blocked by the HCI stack.
     if (nicla_active && now_ms - g_last_nicla_ms >= NICLA_INTERVAL_MS) {
-        niclaUpdate();
+        if (niclaUpdate()) g_nicla_last_data_ms = now_ms;
         g_last_nicla_ms = now_ms;
     }
 
 #ifndef ISOLATION_TEST
-    // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688
-    if (now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
+    // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688.
+    // Skipped when IIC-UART failed — each attempt would block ~1 s on I2C timeout.
+    if (g_iic_uart_ok && now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
         gpsPoll(g_packet);
         g_last_gps_ms = now_ms;
     }
 
 #ifdef SLDEBUG
     // Periodic acquisition status — stops once fix is acquired
-    if (!gpsHasFix() && now_ms - g_last_gps_status_ms >= GPS_STATUS_INTERVAL_MS) {
+    if (g_iic_uart_ok && !gpsHasFix() && now_ms - g_last_gps_status_ms >= GPS_STATUS_INTERVAL_MS) {
         gpsDebugStatus();
         g_last_gps_status_ms = now_ms;
     }
@@ -358,7 +417,7 @@ void loop()
         g_ring_head++;
 
 #ifndef ISOLATION_TEST
-        telemetrySend(g_packet, g_packet);
+        if (g_iic_uart_ok) telemetrySend(g_packet, g_packet);
 #endif
         g_last_tx_ms = now_ms;
         mainCoreLoop++;
@@ -407,12 +466,15 @@ void navigationSetup()
     // Nicla is powered by H7 so both boot simultaneously.
     // BHY2.begin() on Nicla (red LED phase) takes ~8-10 s before it starts advertising.
     // Wait here to let it finish before scanning.
+    // CYAN: waiting for Nicla to finish its internal BHY2.begin() before it advertises
+    ledSet(false, true, true);
     Serial.print("Nicla Sense (BLE) connecting... waiting for Nicla boot... ");
-    delay(10000);
+    delay(15000);
 
-    // Retry BLE scan up to 3 times in case first attempt still races.
+    // BLUE: scanning — attempt BLE scan up to 6 times with 3 s between retries
+    ledSet(false, false, true);
     bool nicla_found = false;
-    for (int attempt = 1; attempt <= 3 && !nicla_found; attempt++) {
+    for (int attempt = 1; attempt <= 6 && !nicla_found; attempt++) {
         if (attempt > 1) {
             Serial.print("retry ");
             Serial.print(attempt);
@@ -422,6 +484,8 @@ void navigationSetup()
         nicla_found = BHY2Host.begin(false, NICLA_VIA_BLE);
     }
     if (nicla_found) {
+        // WHITE: Nicla connected — configuring sensors and waiting for magnetometer
+        ledSet(true, true, true);
         nicla_barometer.begin(10, 0);
         nicla_temp.begin(10, 0);
         nicla_ori.begin(10, 0);
@@ -433,11 +497,16 @@ void navigationSetup()
             delay(50);
         }
         nicla_active = (nicla_temp.value() != 0.0f);
+        if (nicla_active) g_packet.flags |= FLAG_NICLA_BLE_OK;
+        g_nicla_ble_connected = nicla_active;
         Serial.println(nicla_active ? "OK" : "connected but no data yet — continuing");
-        Serial.println("Waiting for initial magnometer calibration (Do not move) ");
+        // Thread started from main loop once M4 has sent its first real sensor data.
+        // Starting it here races with the OpenAMP virtqueue initialisation of the first
+        // M4→M7 UpdateSensorPackage call and causes a consistent hang at TX#2.
+        Serial.println("Waiting for initial magnetometer calibration (do not move)");
         delay(5000);
-        Serial.println("Initail magnometer calibration complete. Please calibrate for 40 seconds before launch (rotate slowly cansat in various directions)");
-        
+        Serial.println("Initial magnetometer calibration complete. Rotate cansat slowly in various directions for 40 s before launch.");
+
     } else {
         Serial.println("FAILED — Nicla not found over BLE");
 
@@ -456,12 +525,12 @@ void navigationSetup()
     Serial.println("OK");
 }
 
-void niclaUpdate()
+// Returns true when a valid temperature reading was accepted — caller updates g_nicla_last_data_ms.
+bool niclaUpdate()
 {
-    // update() calls BLE.poll() which processes any pending BLE notifications
-    // from the Nicla. Sensor values are updated by the notification callbacks —
-    // read .value() immediately after.
-    BHY2Host.update();
+    if (!g_nicla_ble_connected) {
+        return false;
+    }
 
     // Always read latest values — returns 0.0 until Nicla sends its first packet.
     float t2 = nicla_temp.value();
@@ -470,8 +539,9 @@ void niclaUpdate()
     // Outlier rejection — same bounds as BME688. A single corrupt BLE packet
     // can produce physically impossible values that would falsely trigger the
     // flight state machine (ascent/apogee/parachute deploy).
-    if (t2 >= -50.0f && t2 <= 85.0f)   g_packet.primary.temperature2 = t2;
-    if (p2 >= 300.0f  && p2 <= 1100.0f) g_packet.primary.pressure2    = p2;
+    bool t2_valid = (t2 >= -50.0f && t2 <= 85.0f);
+    if (t2_valid)                        g_packet.primary.temperature2 = t2;
+    if (p2 >= 300.0f && p2 <= 1100.0f)  g_packet.primary.pressure2    = p2;
 
 #ifdef SLDEBUG
     static uint8_t nicla_dbg_count = 0;
@@ -507,6 +577,8 @@ void niclaUpdate()
             nicla_altitude = alt.get_alt(g_packet.primary.temperature2, g_packet.primary.pressure2);
         }
     }
+
+    return t2_valid;
 }
 
 
@@ -515,8 +587,10 @@ void navigationUpdate()
     
     if (!alt_init) return;   // altitude reference not yet set — nothing to do
 
-    // Ascent detection
-    if (g_packet.state == STATE_PAD && nicla_altitude > 10.0f) {
+    // Ascent detection — threshold 30 m to absorb BMP390 warm-up pressure drift
+    // (~10 m altitude error in the first ~90 s after power-on).  10 m was enough
+    // to trigger a false PAD→ASCENT→DESCENT transition outdoors.
+    if (g_packet.state == STATE_PAD && nicla_altitude > 30.0f) {
         g_packet.state = STATE_ASCENT;
         Serial.println("NAV: ascent detected");
     }
@@ -687,6 +761,18 @@ void M4Error()
     Serial.println(")");
 }
 
+// M4 pulls this once per sensor cycle — M4→M7 direction only, no deadlock risk.
+GPSReply getGPSDataForM4()
+{
+    GPSReply r;
+    r.lat  = g_packet.secondary.latitude;
+    r.lon  = g_packet.secondary.longitude;
+    r.alt  = g_packet.secondary.altitude_gps;
+    r.sats = (float)g_packet.secondary.gps_satellites;
+    r.fix  = g_packet.secondary.gps_fix ? 1.0f : 0.0f;
+    return r;
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -712,7 +798,8 @@ void printPacketToSerial()
     Serial.print(g_packet.primary.temperature, 1);
     Serial.print("C  T2:");
     Serial.print(g_packet.primary.temperature2, 1);
-    Serial.print("C  P:");
+    Serial.print(nicla_active ? "C" : "C(ble-lost)");
+    Serial.print("  P:");
     Serial.print(g_packet.primary.pressure, 1);
     Serial.print("hPa  Alt_baro:");
     Serial.print(g_packet.primary.altitude_baro, 0);

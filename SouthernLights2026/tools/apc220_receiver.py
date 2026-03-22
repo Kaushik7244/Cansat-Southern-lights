@@ -38,11 +38,13 @@ SYNC_2 = 0x55
 #   B   = uint8   state (FlightState enum)
 #   B   = uint8   m4_errors
 #   B   = uint8   m7_errors
+#   B   = uint8   flags (bit 0 = FLAG_NICLA_BLE_OK)
 #   fff fff = 6x float  PrimaryData (temp, press, hum, alt_baro, temp2, press2)
 #   fffff   = 5x float  SecondaryData floats (lat, lon, alt_gps, speed_ms, heading)
 #   B   = uint8   gps_satellites
 #   ?   = bool    gps_fix
-PACKET_FMT  = '<HIIBBBfffffffffffB?xx'   # xx = 2 trailing pad bytes in SecondaryData
+PACKET_FMT  = '<HIIBBBBfffffffffffB?xx'  # xx = 2 trailing pad bytes in SecondaryData
+FLAG_NICLA_BLE_OK = 0x01
 PAYLOAD_SIZE = struct.calcsize(PACKET_FMT)   # 59 bytes
 FRAME_SIZE   = 3 + PAYLOAD_SIZE + 2          # sync(2) + len(1) + payload + crc(2) = 64
 
@@ -59,7 +61,7 @@ CSV_HEADER = (
     "seq,ts_ms,utc_ts,utc_time,state,"
     "temp1_C,press1_hPa,hum_pct,alt_baro_m,temp2_C,press2_hPa,"
     "lat,lon,alt_gps_m,speed_ms,heading_deg,gps_sats,gps_fix,"
-    "m4_errors,m7_errors"
+    "m4_errors,m7_errors,nicla_ble_ok"
 )
 
 
@@ -89,19 +91,20 @@ def unpack_packet(payload: bytes) -> dict:
         'state':          FLIGHT_STATES.get(f[3], f'UNKNOWN({f[3]})'),
         'm4_errors':      f[4],
         'm7_errors':      f[5],
-        'temperature':    f[6],
-        'pressure':       f[7],
-        'humidity':       f[8],
-        'altitude_baro':  f[9],
-        'temperature2':   f[10],
-        'pressure2':      f[11],
-        'latitude':       f[12],
-        'longitude':      f[13],
-        'altitude_gps':   f[14],
-        'speed_ms':       f[15],
-        'heading':        f[16],
-        'gps_satellites': f[17],
-        'gps_fix':        f[18],
+        'flags':          f[6],
+        'temperature':    f[7],
+        'pressure':       f[8],
+        'humidity':       f[9],
+        'altitude_baro':  f[10],
+        'temperature2':   f[11],
+        'pressure2':      f[12],
+        'latitude':       f[13],
+        'longitude':      f[14],
+        'altitude_gps':   f[15],
+        'speed_ms':       f[16],
+        'heading':        f[17],
+        'gps_satellites': f[18],
+        'gps_fix':        f[19],
     }
 
 
@@ -121,7 +124,9 @@ def print_packet(pkt: dict, stats: dict) -> None:
           f"  [RX:{stats['rx']} CRC_ERR:{stats['crc_err']} SKIPPED:{stats['skipped']}] ---")
     print(f"  T1:{pkt['temperature']:.1f}°C  P1:{pkt['pressure']:.1f}hPa"
           f"  Hum:{pkt['humidity']:.1f}%  Alt_baro:{pkt['altitude_baro']:.0f}m")
-    print(f"  T2:{pkt['temperature2']:.1f}°C  P2:{pkt['pressure2']:.1f}hPa")
+    nicla_ok = bool(pkt['flags'] & FLAG_NICLA_BLE_OK)
+    print(f"  T2:{pkt['temperature2']:.1f}°C  P2:{pkt['pressure2']:.1f}hPa"
+          f"{'  [Nicla BLE lost]' if not nicla_ok else ''}")
     if pkt['gps_fix']:
         print(f"  GPS: {pkt['latitude']:.6f}, {pkt['longitude']:.6f}"
               f"  {pkt['altitude_gps']:.0f}m  {pkt['speed_ms']:.1f}m/s"
@@ -140,7 +145,7 @@ def packet_to_csv(pkt: dict) -> str:
         f"{pkt['temperature2']:.2f},{pkt['pressure2']:.2f},"
         f"{pkt['latitude']:.6f},{pkt['longitude']:.6f},{pkt['altitude_gps']:.1f},"
         f"{pkt['speed_ms']:.2f},{pkt['heading']:.1f},{pkt['gps_satellites']},{int(pkt['gps_fix'])},"
-        f"{pkt['m4_errors']},{pkt['m7_errors']}"
+        f"{pkt['m4_errors']},{pkt['m7_errors']},{int(bool(pkt['flags'] & FLAG_NICLA_BLE_OK))}"
     )
 
 
@@ -240,7 +245,7 @@ def run(port: str, baud: int) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    port = sys.argv[1] if len(sys.argv) > 1 else 'COM14'
+    port = sys.argv[1] if len(sys.argv) > 1 else 'COM7'
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else 9600
     try:
         run(port, baud)

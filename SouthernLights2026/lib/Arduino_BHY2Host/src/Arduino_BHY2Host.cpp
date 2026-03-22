@@ -71,6 +71,16 @@ void Arduino_BHY2Host::update(unsigned long ms)
   delay(ms);
 }
 
+bool Arduino_BHY2Host::connected()
+{
+#ifdef __BHY2_HOST_BLE_SUPPORTED__
+  if (_wiring == NICLA_VIA_BLE) {
+    return bleHandler.connected();
+  }
+#endif
+  return true;  // non-BLE wiring has no connection state
+}
+
 void Arduino_BHY2Host::configureSensor(SensorConfigurationPacket& config)
 {
   if (_wiring == NICLA_VIA_BLE) {

@@ -128,6 +128,7 @@ struct SensorPacket {
     FlightState state;         // Current flight state
     uint8_t     m4_errors;     // M4 cumulative error count (incremented on sensor failure)
     uint8_t     m7_errors;     // M7 cumulative error count
+    uint8_t     flags;         // status bits — see FLAG_* constants
 
     PrimaryData   primary;     // Tier 1 — always transmitted
     SecondaryData secondary;   // Tier 2 — transmitted when available
@@ -140,6 +141,9 @@ struct SensorPacket {
 // Built from g_packet by toBinary() in telemetry.cpp before sending.
 // __attribute__((packed)) removes padding so sizeof() matches wire size exactly.
 // ---------------------------------------------------------------------------
+// Status flags for TxPacket.flags
+static const uint8_t FLAG_NICLA_BLE_OK = 0x01;  // bit 0: Nicla BLE connected and delivering data
+
 struct __attribute__((packed)) TxPacket {
     uint16_t    sequence;
     uint32_t    timestamp_ms;
@@ -147,10 +151,11 @@ struct __attribute__((packed)) TxPacket {
     FlightState state;
     uint8_t     m4_errors;
     uint8_t     m7_errors;
+    uint8_t     flags;        // status bits — see FLAG_* constants above
     PrimaryData   primary;    // 6 floats = 24 bytes
     SecondaryData secondary;  // 5 floats + uint8 + bool = 22 bytes
 };
-// Total TxPacket payload: ~57 bytes. Well within APC220 and LoRa limits.
+// Total TxPacket payload: ~60 bytes. Well within APC220 and LoRa limits.
 
 // ---------------------------------------------------------------------------
 // WIRE FRAME FORMAT
@@ -164,6 +169,22 @@ struct __attribute__((packed)) TxPacket {
 static const uint8_t FRAME_SYNC_1      = 0xAA;
 static const uint8_t FRAME_SYNC_2      = 0x55;
 static const uint8_t FRAME_PAYLOAD_LEN = sizeof(TxPacket);
+
+// ---------------------------------------------------------------------------
+// GPS REPLY — M4 pulls this from M7 via RPC.call("getGPSData") each cycle.
+// All floats to avoid alignment issues across cores. fix: 1.0 = valid, 0.0 = none.
+// Only M4→M7 direction used, so no bidirectional RPC deadlock possible.
+// ---------------------------------------------------------------------------
+struct GPSReply {
+    float lat;
+    float lon;
+    float alt;
+    float sats;
+    float fix;
+#ifdef MSGPACK_DEFINE
+    MSGPACK_DEFINE(lat, lon, alt, sats, fix);
+#endif
+};
 
 // ---------------------------------------------------------------------------
 // RING BUFFER  (M7 only)

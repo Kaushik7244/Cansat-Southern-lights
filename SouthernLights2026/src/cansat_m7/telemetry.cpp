@@ -73,6 +73,7 @@ static size_t buildFrame(const SensorPacket& pkt, uint8_t* buf) {
     tx.state        = pkt.state;
     tx.m4_errors    = pkt.m4_errors;
     tx.m7_errors    = pkt.m7_errors;
+    tx.flags        = pkt.flags;
     tx.primary      = pkt.primary;
     tx.secondary    = pkt.secondary;
 

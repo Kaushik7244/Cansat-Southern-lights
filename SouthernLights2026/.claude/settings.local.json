@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find ./.pio -type f -path */ArduinoBLE/src/*.h)"
+    ]
+  }
+}

@@ -136,7 +136,10 @@ static void printPacket(const TxPacket &tx, float rssi, float snr)
     Serial.print("%  Alt:"); Serial.print(tx.primary.altitude_baro, 1); Serial.println("m");
 
     Serial.print("  T2:"); Serial.print(tx.primary.temperature2, 2);
-    Serial.print("C  P2:"); Serial.print(tx.primary.pressure2, 2); Serial.println("hPa");
+    Serial.print("C  P2:"); Serial.print(tx.primary.pressure2, 2);
+    Serial.print("hPa");
+    if (!(tx.flags & FLAG_NICLA_BLE_OK)) Serial.print("  [Nicla BLE lost]");
+    Serial.println();
 
     if (tx.secondary.gps_fix) {
         Serial.print("  GPS:");

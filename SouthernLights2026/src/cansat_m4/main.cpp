@@ -86,6 +86,10 @@ static uint16_t g_lora_seq    = 0;
 static bool     g_lora_ok     = false;
 static uint8_t  g_lora_errors = 0;
 
+// GPS in LoRa: not yet implemented — GPS lives on M7 and appears in APC220 packets.
+// RPC struct returns (GPSReply) caused OpenAMP shared-memory issues; parked until
+// a safe integer-encoded pull mechanism is implemented.
+
 static uint16_t loraCrc16(const uint8_t *data, size_t len)
 {
     uint16_t crc = 0xFFFF;
@@ -117,8 +121,12 @@ static void loraSendBME()
     tx.primary.temperature2  = 0.0f;   // BMP390 not available on M4
     tx.primary.pressure2     = 0.0f;
 
-    // secondary left zero — no GPS on M4
-    tx.secondary.gps_fix = false;
+    // secondary — GPS lives on M7; LoRa carries zeros until a safe pull mechanism is added
+    tx.secondary.latitude       = 0.0f;
+    tx.secondary.longitude      = 0.0f;
+    tx.secondary.altitude_gps   = 0.0f;
+    tx.secondary.gps_satellites = 0;
+    tx.secondary.gps_fix        = false;
 
     const uint8_t plen = sizeof(TxPacket);
     uint8_t frame[2 + 1 + plen + 2];

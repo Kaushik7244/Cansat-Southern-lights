@@ -65,6 +65,10 @@ public:
    */
   void update();
   /**
+   * @brief Returns true when the BLE peripheral is currently connected (BLE mode only).
+   */
+  bool connected();
+  /**
    * @brief Requests new sensor data from the client (Nicla Sense ME) and saves it locally so it can be retrieved via `Sensor` objects. The Nicla Sense ME's sensors are then put to sleep for the given amount of milliseconds.
    * 
    * @param ms (optional) time to set Nicla Sense ME to sleep in milliseconds

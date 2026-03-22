@@ -23,8 +23,12 @@ public:
    */
   void update();
   /**
-   * @brief Disconnected Nicla from host and close BLE connection 
-   * 
+   * @brief Returns true when the BLE peripheral is currently connected.
+   */
+  bool connected();
+  /**
+   * @brief Disconnected Nicla from host and close BLE connection
+   *
    */
   void end();
 

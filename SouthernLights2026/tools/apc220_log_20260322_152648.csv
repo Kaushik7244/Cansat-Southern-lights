@@ -1,0 +1,1 @@
+seq,ts_ms,utc_ts,utc_time,state,temp1_C,press1_hPa,hum_pct,alt_baro_m,temp2_C,press2_hPa,lat,lon,alt_gps_m,speed_ms,heading_deg,gps_sats,gps_fix,m4_errors,m7_errors

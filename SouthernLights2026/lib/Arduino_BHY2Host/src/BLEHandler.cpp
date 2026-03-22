@@ -140,17 +140,18 @@ bool BLEHandler::connectToNicla()
   return true;
 }
 
-void BLEHandler::update() 
+void BLEHandler::update()
 {
-  BLE.poll();
+  // 5 ms timeout — HCI.lockForRead() without a timeout can block indefinitely during
+  // BLE connection-parameter renegotiation (~30 s after initial connect).
+  // That causes mbed priority inheritance to boost this thread above the main loop,
+  // starving it completely.  The timeout caps worst-case blocking to 5 ms per call.
+  BLE.poll(5);
+}
 
-  if (!niclaPeripheral.connected()) {
-    if (_debug) {
-      _debug->println("Peripheral disconnected");
-    }
-    begin();
-  }
-
+bool BLEHandler::connected()
+{
+  return niclaPeripheral.connected();
 }
 
 void BLEHandler::end()
