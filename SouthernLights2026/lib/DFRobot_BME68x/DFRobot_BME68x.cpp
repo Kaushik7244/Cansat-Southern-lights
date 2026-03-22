@@ -251,7 +251,7 @@ static int8_t bme68x_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
 {
   UNUSED(dev_id);
   SPI.begin();
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  SPI.beginTransaction(SPISettings(100000, MSBFIRST, SPI_MODE0));
   digitalWrite(bme68x_cs, 0);
   SPI.transfer(reg_addr | 0x80);
   while(len --) {
@@ -267,7 +267,7 @@ static int8_t bme68x_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, 
 {
   UNUSED(dev_id); 
   SPI.begin();
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  SPI.beginTransaction(SPISettings(100000, MSBFIRST, SPI_MODE0));
   digitalWrite(bme68x_cs, 0);
   SPI.transfer(reg_addr);
   while(len --) {

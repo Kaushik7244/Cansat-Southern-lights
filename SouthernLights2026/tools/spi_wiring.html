@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SPI Wiring — SouthernLights CanSat 2026</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    margin: 30px;
+    color: #000;
+  }
+  h1 {
+    font-size: 16px;
+    margin-bottom: 4px;
+  }
+  p.sub {
+    font-size: 11px;
+    color: #444;
+    margin-top: 0;
+    margin-bottom: 20px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+  th {
+    background: #222;
+    color: #fff;
+    padding: 7px 12px;
+    text-align: center;
+    font-size: 13px;
+  }
+  td {
+    padding: 6px 12px;
+    border: 1px solid #ccc;
+    text-align: center;
+  }
+  tr:nth-child(even) td {
+    background: #f5f5f5;
+  }
+  /* colour swatches */
+  .swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid #888;
+    vertical-align: middle;
+    margin-right: 5px;
+  }
+  .wire {
+    font-weight: bold;
+    white-space: nowrap;
+  }
+  .shared {
+    background: #fffbe6 !important;
+  }
+  .note {
+    font-size: 11px;
+    color: #555;
+    margin-top: 18px;
+  }
+  @media print {
+    body { margin: 15mm; }
+  }
+</style>
+</head>
+<body>
+
+<h1>SPI Wiring Map — BME688 &amp; RFM95W → Portenta H7</h1>
+<p class="sub">SouthernLights CanSat 2026 &nbsp;|&nbsp; Highlighted rows = shared Y-junction wires</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>BME688 pin</th>
+      <th>Wire</th>
+      <th>Portenta H7</th>
+      <th>Wire</th>
+      <th>RFM95W pin</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr class="shared">
+      <td>SDO</td>
+      <td class="wire"><span class="swatch" style="background:#e87722"></span>Orange</td>
+      <td><strong>D10</strong> (MISO)</td>
+      <td class="wire"><span class="swatch" style="background:#e87722"></span>Orange</td>
+      <td>MISO</td>
+    </tr>
+
+    <tr class="shared">
+      <td>SDI</td>
+      <td class="wire"><span class="swatch" style="background:#7b4f2e"></span>Brown</td>
+      <td><strong>D8</strong> (MOSI)</td>
+      <td class="wire"><span class="swatch" style="background:#7b4f2e"></span>Brown</td>
+      <td>MOSI</td>
+    </tr>
+
+    <tr class="shared">
+      <td>SCK</td>
+      <td class="wire"><span class="swatch" style="background:#f5d800"></span>Yellow</td>
+      <td><strong>D9</strong> (SCK)</td>
+      <td class="wire"><span class="swatch" style="background:#f5d800"></span>Yellow</td>
+      <td>SCK</td>
+    </tr>
+
+    <tr>
+      <td>CSB</td>
+      <td class="wire"><span class="swatch" style="background:#2e8b2e"></span>Green</td>
+      <td><strong>D7</strong> (BME CS)</td>
+      <td>—</td>
+      <td>—</td>
+    </tr>
+
+    <tr>
+      <td>—</td>
+      <td>—</td>
+      <td><strong>D6</strong> (LoRa CS)</td>
+      <td class="wire"><span class="swatch" style="background:#2e8b2e"></span>Green</td>
+      <td>NSS</td>
+    </tr>
+
+    <tr>
+      <td>—</td>
+      <td>—</td>
+      <td><strong>D5</strong> (DIO0)</td>
+      <td class="wire"><span class="swatch" style="background:#f0f0f0; border:1px solid #888"></span>White</td>
+      <td>DIO0</td>
+    </tr>
+
+    <tr>
+      <td>—</td>
+      <td>—</td>
+      <td><strong>D4</strong> (RESET)</td>
+      <td class="wire"><span class="swatch" style="background:#1a6abf"></span>Blue</td>
+      <td>RESET</td>
+    </tr>
+
+    <tr>
+      <td>VDD</td>
+      <td class="wire"><span class="swatch" style="background:#cc0000"></span>Red</td>
+      <td><strong>3V3</strong></td>
+      <td class="wire"><span class="swatch" style="background:#cc0000"></span>Red</td>
+      <td>VCC</td>
+    </tr>
+
+    <tr>
+      <td>GND</td>
+      <td class="wire"><span class="swatch" style="background:#222"></span>Black</td>
+      <td><strong>GND</strong></td>
+      <td class="wire"><span class="swatch" style="background:#222"></span>Black</td>
+      <td>GND</td>
+    </tr>
+
+  </tbody>
+</table>
+
+<p class="note">  
+  RFM95W antenna: solder 86 mm wire to <strong>ANA</strong> pad (quarter-wave at 868 MHz).
+</p>
+
+</body>
+</html>

@@ -1,16 +1,28 @@
 #include <RPC.h>
 #include <DFRobot_BME68x.h>
+#include <SPI.h>
+#include <LoRa.h>
+#include "data_types.h"
 
 // Select BME688 bus: define BME_SPI to use SPI (D7-D10), otherwise I2C (Wire, 0x77).
 // Set via platformio.ini build_flags: -DBME_SPI
 //#define BME_SPI
 
 #ifdef BME_SPI
-  #include <SPI.h>
-  #define BME_CS  7    // D7 = PI_0 — must be Arduino pin number, not PinName
+  #define BME_CS  7    // D7 = PI_0
 #else
   #include <Wire.h>
 #endif
+
+// RFM95W — shares SPI bus with BME688, separate CS
+#define LORA_NSS    6   // D6 = PA_8
+#define LORA_DIO0   5   // D5 = PC_6
+#define LORA_RESET  4   // D4 = PC_7
+#define LORA_FREQ   868000000L
+#define LORA_SF     9
+#define LORA_BW     125000L
+#define LORA_CR     5
+#define LORA_POWER  17
 
 //#define SLDEBUG
 
@@ -66,6 +78,63 @@ static M4Record  m4_log[M4_LOG_SIZE];
 static uint16_t  m4_log_count = 0;
 static bool      m4_log_full  = false;
 
+// ---------------------------------------------------------------------------
+// LoRa TX — RFM95W on D6 (CS), D5 (DIO0), D4 (RESET)
+// Shares SPI bus with BME688 (D7 CS). Both CS lines managed independently.
+// ---------------------------------------------------------------------------
+static uint16_t g_lora_seq    = 0;
+static bool     g_lora_ok     = false;
+static uint8_t  g_lora_errors = 0;
+
+static uint16_t loraCrc16(const uint8_t *data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : (crc << 1);
+    }
+    return crc;
+}
+
+static void loraSendBME()
+{
+    if (!g_lora_ok) return;
+
+    TxPacket tx;
+    memset(&tx, 0, sizeof(tx));
+    tx.sequence      = g_lora_seq++;
+    tx.timestamp_ms  = millis();
+    tx.boot_epoch    = 0;
+    tx.state         = STATE_PAD;       // M4 does not track flight state
+    tx.m4_errors     = g_lora_errors;
+    tx.m7_errors     = 0;
+
+    tx.primary.temperature   = temperature;
+    tx.primary.pressure      = pressure;
+    tx.primary.humidity      = humidity;
+    tx.primary.altitude_baro = altitude;
+    tx.primary.temperature2  = 0.0f;   // BMP390 not available on M4
+    tx.primary.pressure2     = 0.0f;
+
+    // secondary left zero — no GPS on M4
+    tx.secondary.gps_fix = false;
+
+    const uint8_t plen = sizeof(TxPacket);
+    uint8_t frame[2 + 1 + plen + 2];
+    frame[0] = FRAME_SYNC_1;
+    frame[1] = FRAME_SYNC_2;
+    frame[2] = plen;
+    memcpy(&frame[3], &tx, plen);
+    uint16_t crc = loraCrc16(&frame[2], 1 + plen);
+    frame[3 + plen]     = (uint8_t)(crc >> 8);
+    frame[3 + plen + 1] = (uint8_t)(crc & 0xFF);
+
+    LoRa.beginPacket();
+    LoRa.write(frame, sizeof(frame));
+    LoRa.endPacket();   // blocking — ~330 ms at SF9/BW125
+}
+
 static void logSample()
 {
     if (m4_log_full) return;
@@ -110,7 +179,11 @@ static void onM7Ready() { m7_ready = true; }
 void setup()
 {
 #ifdef BME_SPI
-    // Assert CS LOW immediately so BME688 latches SPI mode at power-on.
+    // Both SPI CS lines must be HIGH before SPI.begin() to avoid false selects.
+    pinMode(LORA_NSS, OUTPUT);
+    digitalWrite(LORA_NSS, HIGH);
+
+    // Assert CS LOW briefly so BME688 latches SPI mode at power-on.
     // Must happen before RPC.begin() and any delay.
     pinMode(BME_CS, OUTPUT);
     digitalWrite(BME_CS, LOW);
@@ -171,6 +244,21 @@ void setup()
     }
     RPC.print("M4 setup: bme.begin() OK\r\n");
 
+    // LoRa init — after BME is confirmed working so SPI is known good
+    LoRa.setPins(LORA_NSS, LORA_RESET, LORA_DIO0);
+    if (LoRa.begin(LORA_FREQ)) {
+        LoRa.setSpreadingFactor(LORA_SF);
+        LoRa.setSignalBandwidth(LORA_BW);
+        LoRa.setCodingRate4(LORA_CR);
+        LoRa.setTxPower(LORA_POWER);
+        LoRa.setSyncWord(0x12);
+        g_lora_ok = true;
+        RPC.print("M4 setup: LoRa OK — 868MHz SF9 BW125\r\n");
+    } else {
+        g_lora_errors++;
+        RPC.print("M4 setup: LoRa FAILED — check RFM95W wiring\r\n");
+    }
+
     localLoop = 0;
 }
 
@@ -221,6 +309,7 @@ void loop()
 #endif
 
     logSample();
+    loraSendBME();   // transmit BME data over RFM95W LoRa (~330 ms blocking at SF9)
     RPC.call("UpdateSensorPackage", temperature, pressure, humidity, gasresistance, altitude);
 
     cnt++;
