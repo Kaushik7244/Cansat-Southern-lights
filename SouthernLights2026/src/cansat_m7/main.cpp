@@ -302,8 +302,43 @@ void setup()
     Serial.println("Wire timeout set to 200ms");
 #endif  // ISOLATION_TEST
 
+    // Wait for Nicla to boot before scanning I2C — BHI260AP needs time after power-on.
+    delay(4000);
+
+    // I2C bus scan — detect Nicla BHI260AP (0x28/0x29) and any other devices.
+    // Scans Wire (I2C3, shared with WK2132) and Wire1 (ESLOV/I2C1).
+    {
+        Serial.println("I2C scan — Wire (I2C3):");
+        Wire.begin();
+        for (uint8_t addr = 1; addr < 127; addr++) {
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0) {
+                Serial.print("  0x");
+                if (addr < 0x10) Serial.print('0');
+                Serial.print(addr, HEX);
+                if (addr == 0x10) Serial.print(" (WK2132)");
+                if (addr == 0x28 || addr == 0x29) Serial.print(" (BHI260AP / Nicla)");
+                if (addr == 0x77 || addr == 0x76) Serial.print(" (BME688)");
+                Serial.println();
+            }
+        }
+        Wire.setTimeout(200);  // restore after scan
+
+        Serial.println("I2C scan — Wire1 (ESLOV/I2C1):");
+        Wire1.begin();
+        for (uint8_t addr = 1; addr < 127; addr++) {
+            Wire1.beginTransmission(addr);
+            if (Wire1.endTransmission() == 0) {
+                Serial.print("  0x");
+                if (addr < 0x10) Serial.print('0');
+                Serial.print(addr, HEX);
+                if (addr == 0x28 || addr == 0x29) Serial.print(" (BHI260AP / Nicla)");
+                Serial.println();
+            }
+        }
+    }
+
     // Nicla Sense + servos
-    delay(4000);  // wait for Nicla to boot before I2C
     navigationSetup();
 
     g_packet.state = STATE_PAD;
@@ -335,14 +370,6 @@ void setup()
 void loop()
 {
     uint32_t now_ms = millis();
-
-#ifdef SLDEBUG
-    // Heartbeat — one character per loop so we can tell exactly when M7 stops.
-    // 'L' = loop entry.  If serial output ends mid-line after a breadcrumb,
-    // the operation that follows the last breadcrumb is the one that hung.
-    static uint32_t s_loop_n = 0;
-    s_loop_n++;
-#endif
 
 #ifndef ISOLATION_TEST
     // Forward M4 RPC.print() output to USB Serial
@@ -394,23 +421,6 @@ void loop()
         uint32_t s2 = M4_SHARED->seq_done;
 
 
-#ifdef SLDEBUG
-        // Periodic SRAM debug — first 5 polls, then every 10 s
-        {
-            static uint32_t s_dbg_count = 0;
-            static uint32_t s_last_dbg_ms = 0;
-            if (s_dbg_count < 5 || now_ms - s_last_dbg_ms >= 10000) {
-                char buf[80];
-                snprintf(buf, sizeof(buf), "SRAM: sw=%lu sd=%lu last=%lu T=%.1f P=%.1f\r\n",
-                         (unsigned long)s1, (unsigned long)s2,
-                         (unsigned long)s_last_m4_seq,
-                         (double)M4_SHARED->temperature, (double)M4_SHARED->pressure);
-                Serial.print(buf);
-                s_dbg_count++;
-                s_last_dbg_ms = now_ms;
-            }
-        }
-#endif
 
         if (s1 == s2 && s1 != s_last_m4_seq) {
             // New, consistent snapshot is ready.
@@ -437,31 +447,18 @@ void loop()
         }
     }
 
-    // Nicla Sense — DISABLED until I2C bus contention with WK2132 is resolved.
-    // BHY2Host.update() blocks Wire (I2C3) for 500+ ms per call, starving
-    // GPS and APC220 and eventually hanging the bus.
-    // TODO: re-enable once Nicla I2C bus sharing is debugged separately.
-#if 0
     if (nicla_active && now_ms - g_last_nicla_ms >= NICLA_INTERVAL_MS) {
         BHY2Host.update();
         niclaUpdate();
         g_last_nicla_ms = now_ms;
     }
-#endif
 
 #ifndef ISOLATION_TEST
     // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688.
     // Skipped when IIC-UART failed — each attempt would block ~1 s on I2C timeout.
     if (g_iic_uart_ok && now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
-#ifdef SLDEBUG
-        uint32_t _gps_t0 = millis();
-#endif
         gpsPoll(g_packet);
         g_last_gps_ms = now_ms;
-#ifdef SLDEBUG
-        uint32_t _gps_dt = millis() - _gps_t0;
-        if (_gps_dt > 50) { Serial.print("WARN: gpsPoll took "); Serial.print(_gps_dt); Serial.println("ms"); }
-#endif
     }
 
 #ifdef SLDEBUG
@@ -491,14 +488,7 @@ void loop()
 
 #ifndef ISOLATION_TEST
         if (g_iic_uart_ok) {
-#ifdef SLDEBUG
-            uint32_t _tx_t0 = millis();
-#endif
             telemetrySend(g_packet, g_packet);
-#ifdef SLDEBUG
-            uint32_t _tx_dt = millis() - _tx_t0;
-            if (_tx_dt > 100) { Serial.print("WARN: telemetrySend took "); Serial.print(_tx_dt); Serial.println("ms"); }
-#endif
         }
 #endif
         g_last_tx_ms = now_ms;
@@ -511,20 +501,8 @@ void loop()
 #ifndef ISOLATION_TEST
     // Drain SD ring buffer
     if (now_ms - g_last_drain_ms >= DRAIN_INTERVAL_MS) {
-#ifdef SLDEBUG
-        uint32_t _sd_t0 = millis();
-        Serial.print("SD drain: ");
-        Serial.print(ring_available());
-        Serial.println(" rows...");
-#endif
         storageDrain(g_packet);
         g_last_drain_ms = now_ms;
-#ifdef SLDEBUG
-        uint32_t _sd_dt = millis() - _sd_t0;
-        Serial.print("SD drain done: ");
-        Serial.print(_sd_dt);
-        Serial.println("ms");
-#endif
     }
 #endif
 }
@@ -552,11 +530,21 @@ float getSimulatedAltitude()
 
 void navigationSetup()
 {
-    // Nicla Sense — DISABLED until I2C bus contention is resolved.
-    // BHY2Host.begin() and update() block Wire for hundreds of ms,
-    // starving GPS and APC220 and eventually hanging the bus.
-    nicla_active = false;
-    Serial.println("Nicla Sense: SKIPPED (disabled for debugging)");
+    // Nicla Sense ME via ESLOV (I2C, address 0x55 on Wire/I2C3).
+    // Nicla must be flashed with NICLA_I2C firmware.
+    Serial.print("Nicla Sense init (ESLOV I2C)... ");
+    if (BHY2Host.begin(false, NICLA_VIA_ESLOV)) {
+        nicla_barometer.begin();
+        nicla_temp.begin();
+        nicla_ori.begin();
+        nicla_active = true;
+        Serial.println("OK");
+    } else {
+        nicla_active = false;
+        Serial.println("FAILED");
+    }
+    // Restore Wire timeout — BHY2Host.begin() may have called Wire.begin()
+    Wire.setTimeout(200);
 
     // Servos init at neutral position
     Serial.print("Servos init... ");

@@ -56,7 +56,7 @@ void Arduino_BHY2Host::update()
         sensorManager.process(longData);
       }
       uint8_t availableLong = availableSensorLongData();
-      for (int i = 0; i < available; i++) {
+      for (int i = 0; i < availableLong; i++) {
         SensorLongDataPacket data;
         readSensorLongData(data);
         sensorManager.process(data);

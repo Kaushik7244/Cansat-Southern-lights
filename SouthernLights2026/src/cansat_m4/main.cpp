@@ -267,24 +267,9 @@ void setup()
 
 void loop()
 {
-#ifdef SLDEBUG
-    RPC.print("M4 loop: delay\r\n");
-#endif
     delay(600);
-
-#ifdef SLDEBUG
-    RPC.print("M4 loop: setGasHeater\r\n");
-#endif
     bme.setGasHeater(320, 100);
-
-#ifdef SLDEBUG
-    RPC.print("M4 loop: startConvert\r\n");
-#endif
     bme.startConvert();
-
-#ifdef SLDEBUG
-    RPC.print("M4 loop: update\r\n");
-#endif
     bme.update();
 
     // DFRobot_BME68x unit conversions — library returns fixed-point integers as float:
@@ -298,14 +283,6 @@ void loop()
     gasresistance = bme.readGasResistance();           // Ω
     altitude      = bme.readAltitude();                // m
 
-#ifdef SLDEBUG
-    {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "M4 data: T=%.2f P=%.2f H=%.2f alt=%.1f\r\n",
-                 temperature, pressure, humidity, altitude);
-        RPC.print(buf);
-    }
-#endif
 
     logSample();
 
@@ -331,15 +308,6 @@ void loop()
     __DMB();
     M4_SHARED->seq_done++;
 
-#ifdef SLDEBUG
-    {
-        char buf[60];
-        snprintf(buf, sizeof(buf), "M4 SRAM: sw=%lu sd=%lu\r\n",
-                 (unsigned long)M4_SHARED->seq_write,
-                 (unsigned long)M4_SHARED->seq_done);
-        RPC.print(buf);
-    }
-#endif
 
     loraSendBME();   // transmit BME data over RFM95W LoRa (~330 ms blocking at SF9)
 }

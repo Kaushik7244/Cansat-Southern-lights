@@ -7,9 +7,14 @@
 #include "Wire.h"
 
 #define ESLOV_MAX_LENGTH      255
-#define ESLOV_DEFAULT_ADDRESS 0x08
+// Nicla Sense ME I2C slave address — must match Arduino_BHY2 (Nicla-side) ESLOV_DEFAULT_ADDRESS.
+// The Nicla library uses 0x55; the original host library had 0x08 which is wrong.
+#define ESLOV_DEFAULT_ADDRESS 0x55
 
-#define ESLOV_INT_PIN (7)
+// ESLOV INT pin — handshake signal from Nicla (HIGH = ready).
+// Default was D7 (PI_0) which conflicts with BME688 CS on M4.
+// D3 (PE_4) is unused on the CanSat build.
+#define ESLOV_INT_PIN (3)
 
 #define I2C_INT_PIN (0)
 

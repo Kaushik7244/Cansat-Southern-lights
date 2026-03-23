@@ -23,7 +23,10 @@ EslovHandler::~EslovHandler()
 
 bool EslovHandler::begin(bool passthrough)
 {
-  pinMode(_eslovIntPin, INPUT);
+  // INPUT_PULLUP: if the ESLOV INT wire is not physically connected, the pin
+  // reads HIGH (= "ready"), so WAIT_ESLOV_INT returns immediately instead of
+  // blocking 200 ms on every I2C transaction.
+  pinMode(_eslovIntPin, INPUT_PULLUP);
   // Wire.begin() is NOT called here — iicUartInit() already initialized Wire
   // with the correct clock and timeout settings.  Calling Wire.begin() again
   // would reset timeout set by iicUartInit().
