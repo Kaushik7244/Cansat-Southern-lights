@@ -2,7 +2,7 @@
  * cansat_m7/main.cpp — SouthernLights CanSat 2026
  *
  * M7 main core: WiFi/NTP, GPS, Nicla Sense, navigation, telemetry, SD storage.
- * M4 pushes BME688 sensor data via RPC → UpdateSensorPackage() → g_packet.primary.
+ * M4 writes BME688 sensor data to shared SRAM (M4_SHARED) → M7 polls → g_packet.primary.
  * M7 owns g_packet, g_ring, flight state, servo control, and transmission timing.
  */
 
@@ -22,6 +22,7 @@
 #include "gps.h"
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
+#include "shared_memory.h"
 
 #ifdef CORE_CM7
 
@@ -99,16 +100,12 @@ int              landing_wp_counter  = 0;      // loops 0→1→2→0→1→...
 Altitude alt;
 float    nicla_altitude = 0.0f;
 float    yaw_deg        = 0.0f;
-volatile bool nicla_active = false;
+bool     nicla_active   = false;
 bool     alt_init       = false;
 bool     flight_end     = false;
 
-// ---------------------------------------------------------------------------
-// RPC bookkeeping
-// ---------------------------------------------------------------------------
-long   mainCoreLoop      = 0;
+// M4 loop counter — read from shared SRAM and printed in printPacketToSerial()
 long   rtCoreLoop        = 0;
-time_t timeForLastH4tick = 0;
 
 // ---------------------------------------------------------------------------
 // Global live packet + ring buffer
@@ -122,72 +119,29 @@ uint8_t          g_ring_tail = 0;
 // Loop timing
 // ---------------------------------------------------------------------------
 static bool          g_iic_uart_ok        = false;  // false → skip GPS poll / telemetry to avoid I2C timeout stalls
-static volatile bool g_nicla_ble_connected = false;
 static uint32_t g_last_tx_ms         = 0;
 static uint32_t g_last_drain_ms      = 0;
 static uint32_t g_last_nicla_ms      = 0;
 static uint32_t g_last_gps_ms        = 0;
 static uint32_t g_last_gps_status_ms = 0;
-static uint32_t g_nicla_last_data_ms = 0;   // millis() of last valid Nicla temperature reading
 static const uint32_t TX_INTERVAL_MS         = 1000;   // transmit every 1 s
 static const uint32_t DRAIN_INTERVAL_MS      = 10000;  // flush SD every 10 s
-static const uint32_t NICLA_INTERVAL_MS      = 200;    // poll Nicla at 5 Hz
-static const uint32_t GPS_INTERVAL_MS        = 20;     // poll GPS at 50 Hz — limits Wire (I2C3) bus load shared with M4 BME688
+static const uint32_t NICLA_INTERVAL_MS      = 1000;   // poll Nicla at 1 Hz (each update blocks ~700 ms)
+static const uint32_t GPS_INTERVAL_MS        = 20;     // poll GPS at 50 Hz
 static const uint32_t GPS_STATUS_INTERVAL_MS = 5000;   // GPS acquisition status every 5 s
 
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
 void navigationSetup();
-bool niclaUpdate();
+void niclaUpdate();
 void navigationUpdate();
 void printPacketToSerial();
-void setH4CoreLoop(long mcl);
-void UpdateSensorPackage(float temperature, float pressure, float humidity,
-                         float gasresistance, float altitude);
-void M4Error();
-GPSReply getGPSDataForM4();
+// setH4CoreLoop, UpdateSensorPackage, M4Error, getGPSDataForM4 removed —
+// M4 data now arrives via shared SRAM (see shared_memory.h), not RPC callbacks.
 void printWifiStatus();
 static void configTime(int gmtOffset_sec, int daylightOffset_sec, const char *ntpServer);
 
-
-// ---------------------------------------------------------------------------
-// Nicla BLE background thread
-//
-// BHY2Host.update() → BLE.poll(5ms timeout) is called here at 20 Hz so BLE
-// events are drained promptly and never accumulate.  Running it in a separate
-// RTOS thread keeps it off the main loop, preventing contention with OpenAMP
-// RPC dispatch when M4 fires UpdateSensorPackage.
-// BLE.poll(5) caps worst-case blocking per call to 5 ms, so priority
-// inheritance from the HCI RX thread can only starve the main loop for ≤5 ms.
-// ---------------------------------------------------------------------------
-// osPriorityIdle: runs only when main loop + RPC threads are idle.
-// BLE.poll(5) caps HCI mutex blocking to 5 ms per call, but priority-inheritance
-// can still briefly boost this thread.  Idle priority ensures it can never starve
-// the main loop or OpenAMP RPC dispatch regardless of BLE event timing.
-static rtos::Thread nicla_ble_thread(osPriorityIdle, 8192, nullptr, "nicla_ble");
-
-static void niclaUpdateThread()
-{
-    // Startup delay — allow OpenAMP virtqueue channels to fully initialise before
-    // any BLE HCI activity begins.  BHY2Host.update() competing with the first
-    // M4→M7 UpdateSensorPackage virtual-queue init causes a hang at TX#2.
-    // 8 s covers the ~2–3 M4 RPC cycles needed to stabilise the shared-memory link.
-    delay(8000);
-
-    while (true) {
-        if (nicla_active) {
-            BHY2Host.update();
-            g_nicla_ble_connected = BHY2Host.connected();
-            if (!g_nicla_ble_connected) {
-                nicla_active = false;
-                g_packet.flags &= ~FLAG_NICLA_BLE_OK;
-                Serial.println("Nicla: BLE disconnected — holding last sensor values");
-            }
-        }
-        delay(50);  // 20 Hz
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -195,23 +149,76 @@ static void niclaUpdateThread()
 
 void setup()
 {
+    // -----------------------------------------------------------------------
+    // Enable Backup SRAM clock — required before any access to 0x38800000.
+    // RCC is shared between cores; M4 inherits the clock enable from M7.
+    // -----------------------------------------------------------------------
+    RCC->AHB4ENR |= RCC_AHB4ENR_BKPRAMEN;
+    __DSB();
+
+    // -----------------------------------------------------------------------
+    // MPU Region 7: mark Backup SRAM (0x38800000, 4 KB) as non-cacheable.
+    // MUST be region 7 (highest ARMv7-M priority) to override mbed's regions.
+    // -----------------------------------------------------------------------
+    {
+        MPU->RNR  = 7;
+        MPU->RBAR = 0x38800000UL;           // Backup SRAM base
+        // Normal memory, Outer+Inner Non-cacheable (TEX=001 C=0 B=0),
+        // Shareable, Full RW access, Execute-Never.
+        MPU->RASR = (1UL << 28)    // XN  — no execute
+                  | (3UL << 24)    // AP  — full access
+                  | (1UL << 19)    // TEX = 001
+                  | (1UL << 18)    // S   — shareable
+                  | (11UL << 1)    // SIZE = 11 → 2^12 = 4 KB
+                  | (1UL << 0);    // ENABLE
+        MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
+        __DSB();
+        __ISB();
+    }
+
+    // Zero the shared SRAM struct.  SRAM4 holds unknown garbage at power-on.
+    // Zeroing guarantees seq_write == seq_done == 0 so M7's poll block waits
+    // for M4's first real write before accepting any data.
+    // SRAM4 is now non-cacheable (MPU region 7), so memset writes go directly
+    // to physical SRAM — no cache flush needed.
+    memset((void *)SHARED_SRAM_BASE, 0, sizeof(M4SharedData));
+    __DMB();
+
     pinMode(LEDR, OUTPUT);
     pinMode(LEDG, OUTPUT);
     pinMode(LEDB, OUTPUT);
     ledSet(true, false, false);  // RED: RPC init
-   
 
     Serial.begin(115200);
     { unsigned long _t = millis(); while (!Serial && millis() - _t < 2000) ; }
     Serial.println("USB Serial up at 115200");
 
+    // Backup SRAM self-test: write a known pattern, read it back, verify.
+    {
+        volatile uint32_t *test_addr = (volatile uint32_t *)SHARED_SRAM_BASE;
+        *test_addr = 0xDEADBEEF;
+        __DMB();
+        uint32_t readback = *test_addr;
+        *test_addr = 0;  // restore to zero for seq_write
+        __DMB();
+        Serial.print("BKPSRAM self-test @0x");
+        Serial.print((uint32_t)SHARED_SRAM_BASE, HEX);
+        Serial.print(": ");
+        if (readback == 0xDEADBEEF) {
+            Serial.println("OK");
+        } else {
+            Serial.print("FAIL — read 0x");
+            Serial.println(readback, HEX);
+        }
+    }
+
     // RPC must start before WiFi so M4 can begin sending sensor data
     Serial.print("RPC init...");
     RPC.begin();
-    RPC.bind("setH4CoreLoop",       setH4CoreLoop);
-    RPC.bind("UpdateSensorPackage", UpdateSensorPackage);
-    RPC.bind("M4Error",             M4Error);
-    // getGPSData RPC removed — struct returns via OpenAMP caused shared-memory issues
+    // UpdateSensorPackage, setH4CoreLoop, M4Error bindings removed —
+    // M4 now writes directly to shared SRAM (no RPC needed for M4→M7 data).
+    // RPC.begin() is still needed: M7 calls RPC.call("DumpM4Log") on landing,
+    // and M7 drains M4's RPC.print() debug output via RPC.available().
     Serial.println("OK");
 
     ledSet(true, true, false);   // YELLOW: peripheral init (SD, radios, GPS)
@@ -284,35 +291,24 @@ void setup()
 
     // GPS on IIC-UART ch2
     gpsInit();
+
+    // -----------------------------------------------------------------------
+    // Wire timeout — MUST be set AFTER all DFRobot_IICSerial::begin() calls.
+    // Each begin() calls Wire.begin() internally, which resets the timeout.
+    // iicUartInit(), telemetryInit(), and gpsInit() all trigger Wire.begin().
+    // Setting it here guarantees the timeout is active for the entire loop.
+    // -----------------------------------------------------------------------
+    Wire.setTimeout(200);  // 200 ms — prevents permanent I2C hangs
+    Serial.println("Wire timeout set to 200ms");
 #endif  // ISOLATION_TEST
 
     // Nicla Sense + servos
+    delay(4000);  // wait for Nicla to boot before I2C
     navigationSetup();
 
     g_packet.state = STATE_PAD;
 
-#ifndef ISOLATION_TEST
-#ifndef BME_SPI
-    // Prime Wire (I2C3) for M4's BME688 I2C access before releasing M4.
-    // Not needed in BME_SPI mode — M4 uses SPI, Wire is only for WK2132.
-    {
-        Wire.begin();
-        Wire.setClock(400000);
-        delay(50);
-        for (uint8_t i = 0; i < 20; i++) {
-            Wire.beginTransmission(0x77);
-            Wire.write(0xD0);
-            Wire.endTransmission();
-            Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
-            while (Wire.available()) Wire.read();
-            delay(5);
-        }
-        Serial.println("Wire primed for M4 (BME688 I2C)");
-    }
-#endif
-    Serial.println("Signaling M4 Core to start sensor operations");
-    RPC.call("M7Ready"); // release M4 to start BME688 init
-#else
+#ifdef ISOLATION_TEST
     Serial.println("ISOLATION_TEST: M4 kept idle");
 #endif
 
@@ -340,15 +336,25 @@ void loop()
 {
     uint32_t now_ms = millis();
 
+#ifdef SLDEBUG
+    // Heartbeat — one character per loop so we can tell exactly when M7 stops.
+    // 'L' = loop entry.  If serial output ends mid-line after a breadcrumb,
+    // the operation that follows the last breadcrumb is the one that hung.
+    static uint32_t s_loop_n = 0;
+    s_loop_n++;
+#endif
+
 #ifndef ISOLATION_TEST
     // Forward M4 RPC.print() output to USB Serial
-    while (RPC.available()) Serial.write(RPC.read());
+    // Limit to 64 bytes per loop to avoid blocking if M4 floods the channel.
+    { int rpc_n = 0; while (RPC.available() && rpc_n < 64) { Serial.write(RPC.read()); rpc_n++; } }
 
     // APC220 time sync command from ground station.
     // Ground operator sends: TIME:<unix_epoch>   e.g. TIME:1742123456
     // python -c "import time,serial; s=serial.Serial('COM1',9600); s.write(b'TIME:'+str(int(time.time())).encode()+b'\n'); s.close()"
 #ifdef APC_ENABLED
     if (APC_SERIAL.available()) {
+        APC_SERIAL.setTimeout(200);  // cap at 200 ms (default 1000 ms blocks the loop)
         String cmd = APC_SERIAL.readStringUntil('\n');
         cmd.trim();
         if (cmd.startsWith("TIME:") && storageGetBootEpoch() == 0) {
@@ -368,31 +374,94 @@ void loop()
 #endif  // APC_ENABLED
 #endif  // ISOLATION_TEST
 
-    // Deferred nicla_ble_thread start — wait until M4 has sent its first real BME data.
-    // Starting the thread during setup races with the OpenAMP first-message initialisation
-    // of the M4→M7 UpdateSensorPackage virtqueue channel and causes a hang at TX#2.
-    // g_packet.primary.temperature is 0.0 until M4 reports; non-zero means M4 is live.
-    static bool s_ble_thread_started = false;
-    if (!s_ble_thread_started && nicla_active && g_packet.primary.temperature != 0.0f) {
-        nicla_ble_thread.start(niclaUpdateThread);
-        s_ble_thread_started = true;
-        Serial.println("Nicla: BLE thread started (M4 data confirmed)");
+    // -----------------------------------------------------------------------
+    // Read M4 sensor data from shared SRAM — non-blocking.
+    //
+    // M4 writes here continuously, regardless of M7 state.
+    // M7 polls on every loop iteration and uses the data when:
+    //   (a) seq_write == seq_done  → snapshot is complete (no write in progress)
+    //   (b) seq_write != last seen → data is newer than what we already have
+    //
+    // SRAM4 is non-cacheable (MPU region 7), so reads always hit physical SRAM.
+    // -----------------------------------------------------------------------
+    {
+        static uint32_t s_last_m4_seq = 0;
+        static uint8_t  s_m4_samples  = 0;   // discard first 2 BME readings (warm-up)
+
+        __DMB();  // ordering barrier before reading shared SRAM
+
+        uint32_t s1 = M4_SHARED->seq_write;
+        uint32_t s2 = M4_SHARED->seq_done;
+
+
+#ifdef SLDEBUG
+        // Periodic SRAM debug — first 5 polls, then every 10 s
+        {
+            static uint32_t s_dbg_count = 0;
+            static uint32_t s_last_dbg_ms = 0;
+            if (s_dbg_count < 5 || now_ms - s_last_dbg_ms >= 10000) {
+                char buf[80];
+                snprintf(buf, sizeof(buf), "SRAM: sw=%lu sd=%lu last=%lu T=%.1f P=%.1f\r\n",
+                         (unsigned long)s1, (unsigned long)s2,
+                         (unsigned long)s_last_m4_seq,
+                         (double)M4_SHARED->temperature, (double)M4_SHARED->pressure);
+                Serial.print(buf);
+                s_dbg_count++;
+                s_last_dbg_ms = now_ms;
+            }
+        }
+#endif
+
+        if (s1 == s2 && s1 != s_last_m4_seq) {
+            // New, consistent snapshot is ready.
+            float t = M4_SHARED->temperature;
+            float p = M4_SHARED->pressure;
+
+            if (s_m4_samples < 2) {
+                // Discard first 2 samples — BME688 first readings after bme.begin()
+                // are unreliable until the heater and compensation circuits settle.
+                s_m4_samples++;
+            } else {
+                // Outlier rejection — I2C collisions can produce impossible values.
+                if (t >= -50.0f && t <= 85.0f && p >= 300.0f && p <= 1100.0f) {
+                    g_packet.primary.temperature   = t;
+                    g_packet.primary.pressure      = p;
+                    g_packet.primary.humidity      = M4_SHARED->humidity;
+                    g_packet.primary.altitude_baro = M4_SHARED->altitude;
+                }
+                g_packet.m4_errors = M4_SHARED->m4_errors;
+            }
+
+            rtCoreLoop    = (long)M4_SHARED->m4_loop;
+            s_last_m4_seq = s1;
+        }
     }
 
-    // Nicla Sense — read cached sensor values at 5 Hz.
-    // BHY2Host.update() runs in nicla_ble_thread (20 Hz) so the main loop
-    // never calls any BLE API and cannot be blocked by the HCI stack.
+    // Nicla Sense — DISABLED until I2C bus contention with WK2132 is resolved.
+    // BHY2Host.update() blocks Wire (I2C3) for 500+ ms per call, starving
+    // GPS and APC220 and eventually hanging the bus.
+    // TODO: re-enable once Nicla I2C bus sharing is debugged separately.
+#if 0
     if (nicla_active && now_ms - g_last_nicla_ms >= NICLA_INTERVAL_MS) {
-        if (niclaUpdate()) g_nicla_last_data_ms = now_ms;
+        BHY2Host.update();
+        niclaUpdate();
         g_last_nicla_ms = now_ms;
     }
+#endif
 
 #ifndef ISOLATION_TEST
     // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688.
     // Skipped when IIC-UART failed — each attempt would block ~1 s on I2C timeout.
     if (g_iic_uart_ok && now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
+#ifdef SLDEBUG
+        uint32_t _gps_t0 = millis();
+#endif
         gpsPoll(g_packet);
         g_last_gps_ms = now_ms;
+#ifdef SLDEBUG
+        uint32_t _gps_dt = millis() - _gps_t0;
+        if (_gps_dt > 50) { Serial.print("WARN: gpsPoll took "); Serial.print(_gps_dt); Serial.println("ms"); }
+#endif
     }
 
 #ifdef SLDEBUG
@@ -403,6 +472,10 @@ void loop()
     }
 #endif
 #endif
+
+    // Push current flight state into Backup SRAM so M4 can stamp LoRa packets correctly.
+    // Backup SRAM is non-cacheable (MPU region 7), so this write is safe and visible to M4.
+    M4_SHARED->m7_flight_state = g_packet.state;
 
     // Navigation — flight state machine and servo control
     navigationUpdate();
@@ -417,10 +490,18 @@ void loop()
         g_ring_head++;
 
 #ifndef ISOLATION_TEST
-        if (g_iic_uart_ok) telemetrySend(g_packet, g_packet);
+        if (g_iic_uart_ok) {
+#ifdef SLDEBUG
+            uint32_t _tx_t0 = millis();
+#endif
+            telemetrySend(g_packet, g_packet);
+#ifdef SLDEBUG
+            uint32_t _tx_dt = millis() - _tx_t0;
+            if (_tx_dt > 100) { Serial.print("WARN: telemetrySend took "); Serial.print(_tx_dt); Serial.println("ms"); }
+#endif
+        }
 #endif
         g_last_tx_ms = now_ms;
-        mainCoreLoop++;
 
 #ifdef SLDEBUG
         printPacketToSerial();
@@ -430,8 +511,20 @@ void loop()
 #ifndef ISOLATION_TEST
     // Drain SD ring buffer
     if (now_ms - g_last_drain_ms >= DRAIN_INTERVAL_MS) {
+#ifdef SLDEBUG
+        uint32_t _sd_t0 = millis();
+        Serial.print("SD drain: ");
+        Serial.print(ring_available());
+        Serial.println(" rows...");
+#endif
         storageDrain(g_packet);
         g_last_drain_ms = now_ms;
+#ifdef SLDEBUG
+        uint32_t _sd_dt = millis() - _sd_t0;
+        Serial.print("SD drain done: ");
+        Serial.print(_sd_dt);
+        Serial.println("ms");
+#endif
     }
 #endif
 }
@@ -459,62 +552,11 @@ float getSimulatedAltitude()
 
 void navigationSetup()
 {
-    // BHY2Host connects to the Nicla Sense ME over BLE.
-    // The Nicla must be running cansat_nicla firmware (NICLA_STANDALONE mode),
-    // advertising as "NICLA". begin() blocks until the device is found — power
-    // the Nicla before the Portenta reaches this point.
-    // Nicla is powered by H7 so both boot simultaneously.
-    // BHY2.begin() on Nicla (red LED phase) takes ~8-10 s before it starts advertising.
-    // Wait here to let it finish before scanning.
-    // CYAN: waiting for Nicla to finish its internal BHY2.begin() before it advertises
-    ledSet(false, true, true);
-    Serial.print("Nicla Sense (BLE) connecting... waiting for Nicla boot... ");
-    delay(15000);
-
-    // BLUE: scanning — attempt BLE scan up to 6 times with 3 s between retries
-    ledSet(false, false, true);
-    bool nicla_found = false;
-    for (int attempt = 1; attempt <= 6 && !nicla_found; attempt++) {
-        if (attempt > 1) {
-            Serial.print("retry ");
-            Serial.print(attempt);
-            Serial.print("... ");
-            delay(3000);
-        }
-        nicla_found = BHY2Host.begin(false, NICLA_VIA_BLE);
-    }
-    if (nicla_found) {
-        // WHITE: Nicla connected — configuring sensors and waiting for magnetometer
-        ledSet(true, true, true);
-        nicla_barometer.begin(10, 0);
-        nicla_temp.begin(10, 0);
-        nicla_ori.begin(10, 0);
-        // Wait up to 5 s for first data to arrive over BLE
-        Serial.print("waiting for data... ");
-        unsigned long t0 = millis();
-        while (nicla_temp.value() == 0.0f && millis() - t0 < 5000) {
-            BHY2Host.update();
-            delay(50);
-        }
-        nicla_active = (nicla_temp.value() != 0.0f);
-        if (nicla_active) g_packet.flags |= FLAG_NICLA_BLE_OK;
-        g_nicla_ble_connected = nicla_active;
-        Serial.println(nicla_active ? "OK" : "connected but no data yet — continuing");
-        // Thread started from main loop once M4 has sent its first real sensor data.
-        // Starting it here races with the OpenAMP virtqueue initialisation of the first
-        // M4→M7 UpdateSensorPackage call and causes a consistent hang at TX#2.
-        Serial.println("Waiting for initial magnetometer calibration (do not move)");
-        delay(5000);
-        Serial.println("Initial magnetometer calibration complete. Rotate cansat slowly in various directions for 40 s before launch.");
-
-    } else {
-        Serial.println("FAILED — Nicla not found over BLE");
-
-
-
-
-
-    }
+    // Nicla Sense — DISABLED until I2C bus contention is resolved.
+    // BHY2Host.begin() and update() block Wire for hundreds of ms,
+    // starving GPS and APC220 and eventually hanging the bus.
+    nicla_active = false;
+    Serial.println("Nicla Sense: SKIPPED (disabled for debugging)");
 
     // Servos init at neutral position
     Serial.print("Servos init... ");
@@ -524,21 +566,18 @@ void navigationSetup()
     break_right.write(RIGHT_NEUTRAL);
     Serial.println("OK");
 }
-
-// Returns true when a valid temperature reading was accepted — caller updates g_nicla_last_data_ms.
-bool niclaUpdate()
+// Called at 5 Hz from the main loop, after BHY2Host.update().
+// Reads the latest cached sensor values from the BHY2 host library and
+// writes them into g_packet. BHY2Host.update() (I2C) must be called first
+// to refresh the cache.
+void niclaUpdate()
 {
-    if (!g_nicla_ble_connected) {
-        return false;
-    }
-
-    // Always read latest values — returns 0.0 until Nicla sends its first packet.
+    // Always read latest values — returns 0.0 until first I2C packet arrives.
     float t2 = nicla_temp.value();
     float p2 = nicla_barometer.value() / 100.0f;  // Pa → hPa
 
-    // Outlier rejection — same bounds as BME688. A single corrupt BLE packet
-    // can produce physically impossible values that would falsely trigger the
-    // flight state machine (ascent/apogee/parachute deploy).
+    // Outlier rejection — corrupt I2C data can produce impossible values that
+    // would falsely trigger the flight state machine.
     bool t2_valid = (t2 >= -50.0f && t2 <= 85.0f);
     if (t2_valid)                        g_packet.primary.temperature2 = t2;
     if (p2 >= 300.0f && p2 <= 1100.0f)  g_packet.primary.pressure2    = p2;
@@ -578,7 +617,6 @@ bool niclaUpdate()
         }
     }
 
-    return t2_valid;
 }
 
 
@@ -725,53 +763,14 @@ void navigationUpdate()
 // ---------------------------------------------------------------------------
 // RPC callbacks — called from M4
 // ---------------------------------------------------------------------------
-
-void setH4CoreLoop(long mcl)
-{
-    rtCoreLoop = mcl;
-    time(&timeForLastH4tick);
-}
-
-void UpdateSensorPackage(float temperature, float pressure, float humidity,
-                         float gasresistance, float altitude)
-{
-    // Discard the first 2 samples — BME688 first reading after bme.begin() is
-    // unreliable on STM32H7 until the heater and compensation settle.
-    static uint8_t m4_samples = 0;
-    if (m4_samples < 2) { m4_samples++; return; }
-
-    // Outlier rejection — I2C bus collisions (shared Wire between M7 Nicla and M4 BME688)
-    // occasionally produce impossible values. Drop any reading outside physical bounds.
-    if (temperature < -50.0f || temperature > 85.0f) return;   // BME688 operating range
-    if (pressure    < 300.0f || pressure    > 1100.0f) return;  // sea level to ~9000 m
-
-    g_packet.primary.temperature   = temperature;
-    g_packet.primary.pressure      = pressure;
-    g_packet.primary.humidity      = humidity;
-    g_packet.primary.altitude_baro = altitude;
-    // gasresistance: no PrimaryData field — will move to TertiaryData when Nicla gas sensor is wired
-    (void)gasresistance;
-}
-
-void M4Error()
-{
-    g_packet.m4_errors++;
-    Serial.print("ERROR from M4 (total: ");
-    Serial.print(g_packet.m4_errors);
-    Serial.println(")");
-}
-
-// M4 pulls this once per sensor cycle — M4→M7 direction only, no deadlock risk.
-GPSReply getGPSDataForM4()
-{
-    GPSReply r;
-    r.lat  = g_packet.secondary.latitude;
-    r.lon  = g_packet.secondary.longitude;
-    r.alt  = g_packet.secondary.altitude_gps;
-    r.sats = (float)g_packet.secondary.gps_satellites;
-    r.fix  = g_packet.secondary.gps_fix ? 1.0f : 0.0f;
-    return r;
-}
+// UpdateSensorPackage, setH4CoreLoop, M4Error, getGPSDataForM4 have been
+// removed.  M4 sensor data now arrives via shared SRAM polling in loop()
+// (see the M4_SHARED poll block above).  No RPC callbacks are needed for the
+// M4→M7 data path any more.
+//
+// RPC.begin() is still called in setup() because:
+//   • M7 triggers RPC.call("DumpM4Log") on landing (M7→M4 direction).
+//   • M7 drains M4's RPC.print() debug output from setup via RPC.available().
 
 // ---------------------------------------------------------------------------
 // Utilities

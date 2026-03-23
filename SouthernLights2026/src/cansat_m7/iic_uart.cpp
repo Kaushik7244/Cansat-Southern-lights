@@ -21,6 +21,12 @@ bool iicUartInit()
     bool apc_ok = (iic_apc.begin(9600) == 0);
     bool gps_ok = (iic_gps.begin(9600) == 0);
 
+    // Set Wire (I2C3) timeout AFTER DFRobot begin() calls.
+    // DFRobot_IICSerial::begin() calls Wire.begin() internally,
+    // which resets any previously set timeout.  Setting it here
+    // ensures the 200 ms timeout is active for all subsequent I2C ops.
+    Wire.setTimeout(200);  // 200 ms — prevents permanent I2C hangs
+
     Serial.print("IIC-UART: APC220 ch1=");
     Serial.print(apc_ok ? "OK" : "FAIL");
     Serial.print("  GPS ch2=");

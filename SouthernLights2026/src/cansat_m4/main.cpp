@@ -3,16 +3,10 @@
 #include <SPI.h>
 #include <LoRa.h>
 #include "data_types.h"
+#include "shared_memory.h"
 
-// Select BME688 bus: define BME_SPI to use SPI (D7-D10), otherwise I2C (Wire, 0x77).
-// Set via platformio.ini build_flags: -DBME_SPI
-//#define BME_SPI
-
-#ifdef BME_SPI
-  #define BME_CS  7    // D7 = PI_0
-#else
-  #include <Wire.h>
-#endif
+// BME688 on SPI — CS on D7 (PI_0)
+#define BME_CS  7
 
 // RFM95W — shares SPI bus with BME688, separate CS
 #define LORA_NSS    6   // D6 = PA_8
@@ -24,7 +18,7 @@
 #define LORA_CR     5
 #define LORA_POWER  17
 
-//#define SLDEBUG
+#define SLDEBUG
 
 // Uncomment to match M7 isolation test mode — M4 idles after RPC.begin().
 // BME688 is disconnected; attempting bme.begin() would hang forever.
@@ -32,21 +26,16 @@
 
 // ----- Southern lights ---------
 // THIS IS THE SECONDARY CORE (M4) LOGIC
-// Sensors, RPC push to M7, and local in-memory flight log.
+// Sensors, shared-SRAM push to M7, and local in-memory flight log.
 #ifdef CORE_CM4
 
 // ---------------------------------------------------------------------------
 // Sensor globals
 // ---------------------------------------------------------------------------
-int   localLoop;
-int   cnt         = 0;
+int   localLoop   = 0;
 float temperature, pressure, humidity, gasresistance, altitude;
 
-#ifdef BME_SPI
-  DFRobot_BME68x_SPI bme(BME_CS);
-#else
-  DFRobot_BME68x_I2C bme(0x77, &Wire);
-#endif
+DFRobot_BME68x_SPI bme(BME_CS);
 
 // ---------------------------------------------------------------------------
 // In-memory flight log
@@ -67,7 +56,7 @@ float temperature, pressure, humidity, gasresistance, altitude;
 struct M4Record {
     uint32_t timestamp_ms;
     float    temperature;    // °C
-    float    pressure;       // hPa (verify units on first run)
+    float    pressure;       // hPa
     float    humidity;       // %RH
     float    gasresistance;  // Ω
     float    altitude;       // m
@@ -110,7 +99,7 @@ static void loraSendBME()
     tx.sequence      = g_lora_seq++;
     tx.timestamp_ms  = millis();
     tx.boot_epoch    = 0;
-    tx.state         = STATE_PAD;       // M4 does not track flight state
+    tx.state         = M4_SHARED->m7_flight_state;  // kept current by M7 via shared SRAM
     tx.m4_errors     = g_lora_errors;
     tx.m7_errors     = 0;
 
@@ -138,9 +127,47 @@ static void loraSendBME()
     frame[3 + plen]     = (uint8_t)(crc >> 8);
     frame[3 + plen + 1] = (uint8_t)(crc & 0xFF);
 
-    LoRa.beginPacket();
-    LoRa.write(frame, sizeof(frame));
-    LoRa.endPacket();   // blocking — ~330 ms at SF9/BW125
+    // BME688 SPI operations corrupt the LoRa radio's registers on the shared
+    // bus. Soft-resets (idle, re-config) are unreliable because the SPI reads
+    // they depend on also return corrupt data.
+    //
+    // Fix: hardware-reset the radio via LoRa.begin() before every TX.
+    // This toggles the RESET pin, forcing the SX1276 into a known state,
+    // then reconfigures all registers from scratch over clean SPI.
+    // Cost: ~25 ms — negligible in a 1 Hz TX cycle.
+    LoRa.begin(LORA_FREQ);
+    LoRa.setSpreadingFactor(LORA_SF);
+    LoRa.setSignalBandwidth(LORA_BW);
+    LoRa.setCodingRate4(LORA_CR);
+    LoRa.setTxPower(LORA_POWER);
+    LoRa.setSyncWord(0x12);
+
+    int bp = LoRa.beginPacket();
+    if (bp == 0) {
+        g_lora_errors++;
+#ifdef SLDEBUG
+        RPC.print("LoRa: beginPacket FAILED\r\n");
+#endif
+        return;
+    }
+
+    size_t written = LoRa.write(frame, sizeof(frame));
+    LoRa.endPacket(true);   // async — starts TX, returns immediately
+
+    // Wait for TX to complete before returning to loop (shared SPI bus).
+    // Air time at SF9/BW125/67 bytes ≈ 411 ms. 500 ms gives safe margin.
+    delay(500);
+
+#ifdef SLDEBUG
+    {
+        char buf[80];
+        snprintf(buf, sizeof(buf),
+                 "LoRa TX: seq=%u bp=%d wr=%u/%u\r\n",
+                 (unsigned)(g_lora_seq - 1), bp, (unsigned)written,
+                 (unsigned)sizeof(frame));
+        RPC.print(buf);
+    }
+#endif
 }
 
 static void logSample()
@@ -181,73 +208,39 @@ void dumpLog()
 // Setup
 // ---------------------------------------------------------------------------
 
-static volatile bool m7_ready = false;
-static void onM7Ready() { m7_ready = true; }
-
 void setup()
 {
-#ifdef BME_SPI
     // Both SPI CS lines must be HIGH before SPI.begin() to avoid false selects.
     pinMode(LORA_NSS, OUTPUT);
     digitalWrite(LORA_NSS, HIGH);
 
-    // Assert CS LOW briefly so BME688 latches SPI mode at power-on.
-    // Must happen before RPC.begin() and any delay.
+    // Assert BME688 CS LOW briefly so it latches SPI mode at power-on,
+    // then release before SPI.begin() hands control to the library.
     pinMode(BME_CS, OUTPUT);
     digitalWrite(BME_CS, LOW);
     delayMicroseconds(100);
     SPI.begin();
     digitalWrite(BME_CS, HIGH);
-#endif
+
     RPC.begin();
 #ifdef ISOLATION_TEST
-    // M7 never calls "M7Ready" in isolation mode — idle here to keep M4 silent.
-    // RPC.begin() must run first so the inter-core link is established.
+    // In isolation mode M4 idles here so it never writes to shared SRAM or touches sensors.
+    // RPC.begin() must run first so the inter-core print channel is ready.
     while (true) delay(1000);
 #endif
 
+    // DumpM4Log is still triggered by M7 via RPC on landing — keep this binding.
+    // M7→M4 RPC calls do NOT block M4's loop (they arrive as callbacks).
     RPC.bind("DumpM4Log", dumpLog);
-    RPC.bind("M7Ready",   onM7Ready);
-    RPC.call("setH4CoreLoop", localLoop++);
-
-    // Wait until M7 has completed its own setup (WiFi, Nicla, etc.)
-    // before touching the shared I2C bus.
-    while (!m7_ready) delay(50);
-
-#ifndef BME_SPI
-    // I2C bus exercise — primes the shared Wire bus before bme.begin().
-    auto i2cExercise = []() {
-        Wire.begin();
-        Wire.setClock(400000);
-        delay(50);
-        uint8_t acks = 0;
-        for (uint8_t i = 0; i < 20; i++) {
-            Wire.beginTransmission(0x77);
-            Wire.write(0xD0);
-            Wire.endTransmission();
-            uint8_t cnt = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
-            if (cnt > 0) { Wire.read(); acks++; }
-            delay(5);
-        }
-        char buf[50];
-        snprintf(buf, sizeof(buf), "M4 I2C exercise: %u/20 reads ACKed\r\n", acks);
-        RPC.print(buf);
-    };
-    i2cExercise();
-    RPC.print("M4 setup: I2C bus exercise done\r\n");
-#endif
 
     RPC.print("M4 setup: calling bme.begin()\r\n");
     uint8_t bme_rslt = 1;
     while (bme_rslt != 0) {
         bme_rslt = bme.begin();
         if (bme_rslt != 0) {
-            RPC.call("M4Error");
+            M4_SHARED->m4_errors++;
             RPC.print("bme begin failure!\r\n");
             delay(2000);
-#ifndef BME_SPI
-            i2cExercise();
-#endif
         }
     }
     RPC.print("M4 setup: bme.begin() OK\r\n");
@@ -266,8 +259,6 @@ void setup()
         g_lora_errors++;
         RPC.print("M4 setup: LoRa FAILED — check RFM95W wiring\r\n");
     }
-
-    localLoop = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +270,7 @@ void loop()
 #ifdef SLDEBUG
     RPC.print("M4 loop: delay\r\n");
 #endif
-    delay(1000);
+    delay(600);
 
 #ifdef SLDEBUG
     RPC.print("M4 loop: setGasHeater\r\n");
@@ -317,15 +308,40 @@ void loop()
 #endif
 
     logSample();
-    loraSendBME();   // transmit BME data over RFM95W LoRa (~330 ms blocking at SF9)
-    RPC.call("UpdateSensorPackage", temperature, pressure, humidity, gasresistance, altitude);
 
-    cnt++;
-    if (cnt > 10)
+    // -----------------------------------------------------------------------
+    // Write sensor data to shared SRAM BEFORE LoRa TX.
+    // LoRa.endPacket() blocks ~330 ms and may hang if the RFM95W is
+    // unresponsive — writing SRAM first guarantees M7 gets BME data
+    // regardless of LoRa health.
+    //
+    // Sequence counter pattern ensures M7 never reads a partial snapshot:
+    //   seq_write incremented first → signals "write starting"
+    //   seq_done  incremented last  → signals "write complete"
+    //   M7 only uses the data when seq_write == seq_done.
+    // -----------------------------------------------------------------------
+    M4_SHARED->seq_write++;
+    __DMB();
+    M4_SHARED->temperature   = temperature;
+    M4_SHARED->pressure      = pressure;
+    M4_SHARED->humidity      = humidity;
+    M4_SHARED->gasresistance = gasresistance;
+    M4_SHARED->altitude      = altitude;
+    M4_SHARED->m4_loop       = (uint32_t)(localLoop++);
+    __DMB();
+    M4_SHARED->seq_done++;
+
+#ifdef SLDEBUG
     {
-        RPC.call("setH4CoreLoop", localLoop++);
-        cnt = 0;
+        char buf[60];
+        snprintf(buf, sizeof(buf), "M4 SRAM: sw=%lu sd=%lu\r\n",
+                 (unsigned long)M4_SHARED->seq_write,
+                 (unsigned long)M4_SHARED->seq_done);
+        RPC.print(buf);
     }
+#endif
+
+    loraSendBME();   // transmit BME data over RFM95W LoRa (~330 ms blocking at SF9)
 }
 
 #endif

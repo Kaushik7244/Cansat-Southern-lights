@@ -250,7 +250,9 @@ static uint8_t bme68x_cs = 0;
 static int8_t bme68x_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
 {
   UNUSED(dev_id);
-  SPI.begin();
+  // SPI.begin() removed — called once in setup(). Repeated calls reinitialise
+  // the SPI peripheral, glitching the shared bus and corrupting the RFM95W LoRa
+  // radio's register state.
   SPI.beginTransaction(SPISettings(100000, MSBFIRST, SPI_MODE0));
   digitalWrite(bme68x_cs, 0);
   SPI.transfer(reg_addr | 0x80);
@@ -265,8 +267,8 @@ static int8_t bme68x_spi_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, u
 
 static int8_t bme68x_spi_write(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len)
 {
-  UNUSED(dev_id); 
-  SPI.begin();
+  UNUSED(dev_id);
+  // SPI.begin() removed — same reason as bme68x_spi_read above.
   SPI.beginTransaction(SPISettings(100000, MSBFIRST, SPI_MODE0));
   digitalWrite(bme68x_cs, 0);
   SPI.transfer(reg_addr);

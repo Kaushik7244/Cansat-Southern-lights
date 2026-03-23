@@ -77,7 +77,9 @@ static bool parseFrame(const uint8_t *buf, size_t len, TxPacket &tx)
 // Packet loss tracking
 // ---------------------------------------------------------------------------
 static uint16_t g_last_seq   = 0;
+static uint32_t g_last_ts    = 0;
 static uint32_t g_total_rx   = 0;
+static uint32_t g_total_dup  = 0;
 static uint32_t g_crc_errors = 0;
 
 // ---------------------------------------------------------------------------
@@ -128,6 +130,7 @@ static void printPacket(const TxPacket &tx, float rssi, float snr)
     Serial.print("  "); Serial.print(stateToStr(tx.state));
     Serial.print("  RSSI "); Serial.print(rssi, 0); Serial.print("dBm SNR ");
     Serial.print(snr, 1); Serial.print("dB  [RX:"); Serial.print(g_total_rx);
+    Serial.print(" DUP:"); Serial.print(g_total_dup);
     Serial.print(" CRC_ERR:"); Serial.print(g_crc_errors); Serial.println("] ---");
 
     Serial.print("  T1:"); Serial.print(tx.primary.temperature, 2);
@@ -220,6 +223,8 @@ void setup()
     Serial.println("OK");
     Serial.print("868MHz BW125 SF"); Serial.print(LORA_SF);
     Serial.print(" CR4/5 sync=0x"); Serial.println(LORA_SYNC_WORD, HEX);
+    Serial.print("sizeof(TxPacket)="); Serial.print(sizeof(TxPacket));
+    Serial.print("  FRAME_PAYLOAD_LEN="); Serial.println(FRAME_PAYLOAD_LEN);
     Serial.println("Listening...\n");
 
     printCSVHeader();
@@ -246,6 +251,17 @@ void loop()
         {
             float rssi = LoRa.packetRssi();
             float snr  = LoRa.packetSnr();
+
+            // SX1276 continuous RX can trigger RX_DONE twice for the same
+            // packet.  Skip exact duplicates (same seq AND same timestamp).
+            if (g_total_rx > 0 && tx.sequence == g_last_seq
+                && tx.timestamp_ms == g_last_ts)
+            {
+                g_total_dup++;
+                g_total_rx++;
+                return;   // back to top of loop()
+            }
+
             g_total_rx++;
 
             if (g_total_rx > 1)
@@ -259,6 +275,7 @@ void loop()
                 }
             }
             g_last_seq = tx.sequence;
+            g_last_ts  = tx.timestamp_ms;
             printPacket(tx, rssi, snr);
         }
         else
@@ -266,7 +283,23 @@ void loop()
             g_crc_errors++;
             Serial.print("CRC/frame error (");
             Serial.print(packetSize);
-            Serial.println(" bytes)");
+            Serial.print(" bytes) hex: ");
+            // Dump first 16 bytes + last 4 bytes for debugging
+            int dump_n = (packetSize < 16) ? packetSize : 16;
+            for (int i = 0; i < dump_n; i++) {
+                if (raw[i] < 0x10) Serial.print('0');
+                Serial.print(raw[i], HEX);
+                Serial.print(' ');
+            }
+            if (packetSize > 20) {
+                Serial.print("... ");
+                for (int i = packetSize - 4; i < packetSize; i++) {
+                    if (raw[i] < 0x10) Serial.print('0');
+                    Serial.print(raw[i], HEX);
+                    Serial.print(' ');
+                }
+            }
+            Serial.println();
         }
     }
     else
@@ -276,6 +309,8 @@ void loop()
         {
             Serial.print("=== alive | RX:");
             Serial.print(g_total_rx);
+            Serial.print(" DUP:");
+            Serial.print(g_total_dup);
             Serial.print(" CRC_ERR:");
             Serial.print(g_crc_errors);
             Serial.println(" ===");

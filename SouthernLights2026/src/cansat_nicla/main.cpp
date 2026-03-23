@@ -2,22 +2,19 @@
  * cansat_nicla/main.cpp — SouthernLights CanSat 2026
  *
  * Firmware for the Nicla Sense ME.
- * Runs the BHI260AP sensor hub in standalone mode with BLE enabled.
+ * Runs the BHI260AP sensor hub in I2C slave mode (ESLOV connector).
  *
- * The Portenta H7 (host) connects via BHY2Host.begin(false, NICLA_VIA_BLE).
- * All sensor configuration (sample rate, latency) is sent by the host over BLE —
+ * The Portenta H7 (host) connects via BHY2Host.begin(false, NICLA_VIA_ESLOV).
+ * All sensor configuration (sample rate, latency) is sent by the host over I2C —
  * no sensor setup is needed here.
- *
- * BLE advertisement:
- *   Local name : "NICLA"
- *   Service    : 34c2e3bb-34aa-11eb-adc1-0242ac120002
  */
 
 #include "Arduino_BHY2.h"
 
 void setup()
 {
-    BHY2.begin(NICLA_STANDALONE);
+    NiclaConfig cfg = NICLA_I2C;
+    BHY2.begin(cfg);
 }
 
 void loop()

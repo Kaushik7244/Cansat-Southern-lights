@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find ./.pio -type f -path */ArduinoBLE/src/*.h)"
+      "Bash(find ./.pio -type f -path */ArduinoBLE/src/*.h)",
+      "Bash(python3 -c \":*)",
+      "Bash(~/.platformio/penv/Scripts/pio run:*)",
+      "Bash(grep -r 0x38000 /c/Users/hfa/.platformio/packages/framework-arduino-mbed --include=*.h --include=*.c --include=*.cpp --include=*.ld)"
     ]
   }
 }

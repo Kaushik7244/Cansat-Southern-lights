@@ -12,8 +12,10 @@ Programming, paraglider, gps
 # Alexander
 Cansat encapsulation, cad, 3d print
 # Aurora
-# Sarah (not participating at the event)
+Paraglider
 # Emily
+Paraglider
+# Sarah (not participating at the event)
 
 ## Goals set by the team:
 Continous registration of temperature and pressure from independent sensors

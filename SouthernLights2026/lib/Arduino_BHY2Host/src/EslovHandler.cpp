@@ -24,8 +24,9 @@ EslovHandler::~EslovHandler()
 bool EslovHandler::begin(bool passthrough)
 {
   pinMode(_eslovIntPin, INPUT);
-  Wire1.begin();
-  Wire1.setClock(400000);
+  // Wire.begin() is NOT called here — iicUartInit() already initialized Wire
+  // with the correct clock and timeout settings.  Calling Wire.begin() again
+  // would reset timeout set by iicUartInit().
   if (passthrough) {
     Serial.begin(115200);
   }
@@ -158,8 +159,8 @@ void EslovHandler::writeDfuPacket(uint8_t *data, uint8_t length)
   uint8_t attempts = 0;
   uint8_t bytesToWrite = length;
   while(bytesToWrite && (attempts < 3)) {
-    Wire1.beginTransmission(ESLOV_DEFAULT_ADDRESS);
-    int ret = Wire1.write(data, length);
+    Wire.beginTransmission(ESLOV_DEFAULT_ADDRESS);
+    int ret = Wire.write(data, length);
     if (_debug){
       _debug->print("Write returned: ");
       _debug->print(ret);
@@ -169,7 +170,7 @@ void EslovHandler::writeDfuPacket(uint8_t *data, uint8_t length)
     endTransmission returns 0 if the number of bytes written
     *  is equal to the total length. Otherwise, a positive number is returned
     */
-    bytesToWrite = Wire1.endTransmission(true);
+    bytesToWrite = Wire.endTransmission(true);
     attempts++;
   }
   if (*(data+1)) {
@@ -186,9 +187,9 @@ void EslovHandler::writeStateChange(EslovState state)
   delay(ESLOV_DELAY);
   WAIT_ESLOV_INT(_eslovIntPin)
   uint8_t packet[2] = {ESLOV_SENSOR_STATE_OPCODE, state};
-  Wire1.beginTransmission(ESLOV_DEFAULT_ADDRESS);
-  Wire1.write((uint8_t*)packet, sizeof(packet));
-  uint8_t txResult = Wire1.endTransmission();
+  Wire.beginTransmission(ESLOV_DEFAULT_ADDRESS);
+  Wire.write((uint8_t*)packet, sizeof(packet));
+  uint8_t txResult = Wire.endTransmission();
   if (_debug) {
     _debug->print("writeStateChange("); _debug->print(state);
     _debug->print(") tx="); _debug->println(txResult);
@@ -203,45 +204,43 @@ void EslovHandler::writeConfigPacket(SensorConfigurationPacket& config)
   uint8_t packet[sizeof(SensorConfigurationPacket) + 1];
   packet[0] = ESLOV_SENSOR_CONFIG_OPCODE;
   memcpy(&packet[1], &config, sizeof(SensorConfigurationPacket));
-  Wire1.beginTransmission(ESLOV_DEFAULT_ADDRESS);
-  Wire1.write(packet, sizeof(SensorConfigurationPacket) + 1);
-  Wire1.endTransmission();
+  Wire.beginTransmission(ESLOV_DEFAULT_ADDRESS);
+  Wire.write(packet, sizeof(SensorConfigurationPacket) + 1);
+  Wire.endTransmission();
   delay(ESLOV_DELAY);
 }
 
 uint8_t EslovHandler::requestPacketAck()
 {
-  // Transition Nicla to ACK state before reading — without this state change
-  // the Nicla NAKs all read requests (returns 0 bytes).
   writeStateChange(ESLOV_SENSOR_ACK_STATE);
-  delay(500);  // brute-force wait — INT pin always HIGH so WAIT_ESLOV_INT gives no sync
-  uint8_t ret = Wire1.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
+  delay(50);   // wait for Nicla to process state change (was 500 — too long for shared bus)
+  uint8_t ret = Wire.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
   if (_debug) {
     _debug->print("requestPacketAck: ret="); _debug->println(ret);
   }
   if (!ret) return 0;
-  return Wire1.read();
+  return Wire.read();
 }
 
 uint8_t EslovHandler::requestAvailableData()
 {
   writeStateChange(ESLOV_AVAILABLE_SENSOR_STATE);
-  delay(500);  // brute-force wait — INT pin always HIGH so WAIT_ESLOV_INT gives no sync
-  uint8_t ret = Wire1.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
+  delay(50);   // wait for Nicla to process state change (was 500 — too long for shared bus)
+  uint8_t ret = Wire.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
   if (_debug) {
     _debug->print("requestAvailableData: ret="); _debug->println(ret);
   }
   if (!ret) return 0;
-  return Wire1.read();
+  return Wire.read();
 }
 
 uint8_t EslovHandler::requestAvailableLongData()
 {
   writeStateChange(ESLOV_AVAILABLE_LONG_SENSOR_STATE);
   WAIT_ESLOV_INT(_eslovIntPin)
-  uint8_t ret = Wire1.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
+  uint8_t ret = Wire.requestFrom(ESLOV_DEFAULT_ADDRESS, 1);
   if (!ret) return 0;
-  return Wire1.read();
+  return Wire.read();
   delay(ESLOV_DELAY);
 }
 
@@ -251,12 +250,12 @@ bool EslovHandler::requestSensorData(SensorDataPacket &sData)
     writeStateChange(ESLOV_READ_SENSOR_STATE);
     WAIT_ESLOV_INT(_eslovIntPin)
   }
-  uint8_t ret = Wire1.requestFrom(ESLOV_DEFAULT_ADDRESS, sizeof(SensorDataPacket));
+  uint8_t ret = Wire.requestFrom(ESLOV_DEFAULT_ADDRESS, sizeof(SensorDataPacket));
   if (!ret) return false;
 
   uint8_t *data = (uint8_t*)&sData;
   for (uint8_t i = 0; i < sizeof(SensorDataPacket); i++) {
-    data[i] = Wire1.read();
+    data[i] = Wire.read();
   }
   return true;
 }
@@ -267,12 +266,12 @@ bool EslovHandler::requestSensorLongData(SensorLongDataPacket &sData)
     writeStateChange(ESLOV_READ_LONG_SENSOR_STATE);
     WAIT_ESLOV_INT(_eslovIntPin)
   }
-  uint8_t ret = Wire1.requestFrom(ESLOV_DEFAULT_ADDRESS, sizeof(SensorLongDataPacket));
+  uint8_t ret = Wire.requestFrom(ESLOV_DEFAULT_ADDRESS, sizeof(SensorLongDataPacket));
   if (!ret) return false;
 
   uint8_t *data = (uint8_t*)&sData;
   for (uint8_t i = 0; i < sizeof(SensorLongDataPacket); i++) {
-    data[i] = Wire1.read();
+    data[i] = Wire.read();
   }
   return true;
 }
@@ -284,9 +283,10 @@ void EslovHandler::niclaAsShield()
 
 void EslovHandler::flushWire()
 {
-  Wire1.end();
-  Wire1.begin();
-  Wire1.setClock(400000);
+  Wire.end();
+  Wire.begin();
+  Wire.setClock(400000);
+  Wire.setTimeout(200);
 }
 
 void EslovHandler::debug(Stream &stream)
