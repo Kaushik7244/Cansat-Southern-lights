@@ -534,9 +534,10 @@ void navigationSetup()
     // Nicla must be flashed with NICLA_I2C firmware.
     Serial.print("Nicla Sense init (ESLOV I2C)... ");
     if (BHY2Host.begin(false, NICLA_VIA_ESLOV)) {
-        nicla_barometer.begin();
-        nicla_temp.begin();
-        nicla_ori.begin();
+        Wire.setTimeout(200);  // BHY2Host.begin() calls Wire.begin(), resetting timeout
+        nicla_barometer.begin(1, 0);
+        nicla_temp.begin(1, 0);
+        nicla_ori.begin(10, 0);
         nicla_active = true;
         Serial.println("OK");
     } else {
@@ -572,7 +573,7 @@ void niclaUpdate()
 
 #ifdef SLDEBUG
     static uint8_t nicla_dbg_count = 0;
-    if (nicla_dbg_count < 3) {
+    if (nicla_dbg_count < 20) {
         char buf[60];
         snprintf(buf, sizeof(buf), "Nicla: T2=%.2f P2=%.2f w=%.2f\r\n",
                  g_packet.primary.temperature2, g_packet.primary.pressure2, nicla_ori.w());
@@ -788,6 +789,8 @@ void printPacketToSerial()
     Serial.print(nicla_active ? "C" : "C(ble-lost)");
     Serial.print("  P:");
     Serial.print(g_packet.primary.pressure, 1);
+    Serial.print("hPa  P2:");
+    Serial.print(g_packet.primary.pressure2, 1);
     Serial.print("hPa  Alt_baro:");
     Serial.print(g_packet.primary.altitude_baro, 0);
     Serial.print("m  Alt_nav:");

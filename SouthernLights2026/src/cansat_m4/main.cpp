@@ -233,17 +233,14 @@ void setup()
     // M7→M4 RPC calls do NOT block M4's loop (they arrive as callbacks).
     RPC.bind("DumpM4Log", dumpLog);
 
-    RPC.print("M4 setup: calling bme.begin()\r\n");
     uint8_t bme_rslt = 1;
     while (bme_rslt != 0) {
         bme_rslt = bme.begin();
         if (bme_rslt != 0) {
             M4_SHARED->m4_errors++;
-            RPC.print("bme begin failure!\r\n");
             delay(2000);
         }
     }
-    RPC.print("M4 setup: bme.begin() OK\r\n");
 
     // LoRa init — after BME is confirmed working so SPI is known good
     LoRa.setPins(LORA_NSS, LORA_RESET, LORA_DIO0);
@@ -254,10 +251,9 @@ void setup()
         LoRa.setTxPower(LORA_POWER);
         LoRa.setSyncWord(0x12);
         g_lora_ok = true;
-        RPC.print("M4 setup: LoRa OK — 868MHz SF9 BW125\r\n");
     } else {
         g_lora_errors++;
-        RPC.print("M4 setup: LoRa FAILED — check RFM95W wiring\r\n");
+        RPC.print("M4: LoRa FAILED\r\n");
     }
 }
 
