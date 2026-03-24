@@ -1,10 +1,8 @@
 /**
  * telemetry.h — SouthernLights CanSat 2026
  *
- * Binary radio telemetry over APC220 (433 MHz) and LoRa (868 MHz).
- *
- * Both radios transmit the same framed TxPacket — Tier 1 + Tier 2 data only.
- * Tier 3 (tertiary) data is never transmitted; it is SD-only.
+ * APC220 (433 MHz) binary telemetry via WK2132 IIC-UART bridge.
+ * LoRa (868 MHz) is handled by M4 core via shared memory.
  *
  * Wire frame format:
  *   [0xAA][0x55][LEN:1][...TxPacket...][CRC16_HI:1][CRC16_LO:1]
@@ -17,32 +15,20 @@
  * Usage:
  *   telemetryInit()        once in setup()
  *   telemetrySend(packet)  called by main loop after stamping sequence + timestamp
- *
- * APC220 is primary. LoRa is secondary — skipped if not available.
- * Call telemetryLoRaAvailable() anywhere in the main sketch to check LoRa status.
- * Both are attempted on each send; failure of one does not block the other.
  */
 
 #pragma once
 #include "data_types.h"
 
 /**
- * Initialise APC220 UART. Initialise LoRa modem if Vision Shield is present.
- * Increments m7_errors if LoRa init fails.
- * Returns true if at least one radio initialised successfully.
+ * Initialise APC220 UART channel on WK2132.
+ * Returns true if APC220 channel is available.
  */
 bool telemetryInit(SensorPacket& g_packet);
 
 /**
- * Returns true if LoRa modem initialised successfully.
- * Use this instead of a separate gLoRaAvailable flag in the main sketch —
- * telemetry.cpp is the single owner of LoRa state.
- */
-bool telemetryLoRaAvailable();
-
-/**
  * Build a TxPacket from the current SensorPacket, frame it, and transmit
- * on all available radios. Increments m7_errors on any send failure.
+ * via APC220. Increments m7_errors on I2C write failure.
  * Non-blocking — does not wait for transmission acknowledgement.
  */
 void telemetrySend(const SensorPacket& pkt, SensorPacket& g_packet);

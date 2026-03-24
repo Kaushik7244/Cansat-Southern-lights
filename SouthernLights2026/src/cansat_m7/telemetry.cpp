@@ -3,42 +3,25 @@
  *
  * See telemetry.h for interface documentation and frame format.
  *
- * APC220  — Serial1 (UART1, D14/D13), 9600 bps, confirmed working pair C+D.
- * LoRa    — Vision Shield Murata module via MKRWAN + AT commands over SerialLoRa.
- *           Requires MKRWAN.h patched for SERIAL_8E1 (see cansat_lora_p2p_notes.md).
+ * APC220 TX via WK2132 IIC-UART bridge (DFR0627) on Wire (I2C3).
+ * Direct Wire writes to FIFO address 0x11 in 32-byte chunks —
+ * bypasses DFRobot IICSerial library (buggy writeFIFO with delay(10)).
+ *
+ * LoRa TX is handled by M4 core via shared memory (see cansat_m4/).
  *
  * CRC16-CCITT (poly 0x1021, init 0xFFFF) — covers LEN byte + TxPacket payload.
  */
 
 #include "telemetry.h"
 #include "hw_config.h"
-#include <MKRWAN.h>
 #include <Arduino.h>
-
-// Read one line from SerialLoRa within timeout_ms (strips \r).
-static String loraReadLine(uint16_t timeout_ms = 600) {
-    unsigned long t0 = millis();
-    String s;
-    while (millis() - t0 < timeout_ms) {
-        while (SerialLoRa.available()) {
-            char c = SerialLoRa.read();
-            if (c == '\n') return s;
-            if (c != '\r') s += c;
-        }
-    }
-    return s;   // timeout — return whatever arrived
-}
+#include <Wire.h>
 
 // ---------------------------------------------------------------------------
-// Radio objects
+// State
 // ---------------------------------------------------------------------------
 
-static LoRaModem lora(SerialLoRa);
-static bool g_apc_ok  = false;
-static bool g_lora_ok = false;
-
-// Single public accessor — main sketch uses this instead of a parallel global flag
-bool telemetryLoRaAvailable() { return g_lora_ok; }
+static bool g_apc_ok = false;
 
 // ---------------------------------------------------------------------------
 // CRC16-CCITT
@@ -109,19 +92,7 @@ bool telemetryInit(SensorPacket& g_packet) {
     Serial.println("[APC220] disabled via hw_config.h (APC_ENABLED not set)");
 #endif
 
-    // LoRa — Vision Shield Murata module.
-    // AT+TTONE/TTX/UTX all return no response — TX blocked on this firmware.
-    // Disabled until dumb-mode RadioLib approach is implemented.
-    // lora.begin() is still called to confirm UART is alive.
-    if (lora.begin(EU868)) {
-        Serial.println("[LoRa] modem responding but TX disabled (AT+TX unsupported)");
-        g_lora_ok = false;   // force disabled — don't waste loop time on dead TX
-    } else {
-        Serial.println("[LoRa] modem not found");
-        g_lora_ok = false;
-    }
-
-    return g_apc_ok || g_lora_ok;
+    return g_apc_ok;
 }
 
 void telemetrySend(const SensorPacket& pkt, SensorPacket& g_packet) {
@@ -129,27 +100,30 @@ void telemetrySend(const SensorPacket& pkt, SensorPacket& g_packet) {
     uint8_t frame[sizeof(TxPacket) + 5];
     size_t  frame_len = buildFrame(pkt, frame);
 
-    // APC220 — write raw bytes, radio handles RF transparently
+    // APC220 — write to WK2132 FIFO via direct Wire in 32-byte chunks.
+    // Bypasses DFRobot IICSerial library (its writeFIFO has unnecessary delay(10)
+    // between chunks). WK2132 FIFO address for sub-UART ch1: 0x11.
 #ifdef APC_ENABLED
     if (g_apc_ok) {
-        size_t written = APC_SERIAL.write(frame, frame_len);
-        if (written != frame_len) {
+        static const uint8_t WK2132_FIFO_APC = 0x11;
+        static const size_t  CHUNK = 32;
+
+        const uint8_t* p   = frame;
+        size_t         left = frame_len;
+        bool           ok   = true;
+
+        while (left) {
+            size_t n = (left > CHUNK) ? CHUNK : left;
+            Wire.beginTransmission(WK2132_FIFO_APC);
+            Wire.write(p, n);
+            if (Wire.endTransmission() != 0) { ok = false; break; }
+            p    += n;
+            left -= n;
+        }
+        if (!ok) {
             g_packet.m7_errors++;
         }
     }
 #endif
 
-    // LoRa — AT+UTX sends a raw payload over the air without LoRaWAN overhead
-    // Format: AT+UTX=<len>\r then write <len> raw bytes
-    if (g_lora_ok) {
-        // Flush any pending RX data before sending
-        while (SerialLoRa.available()) SerialLoRa.read();
-
-        // AT+TTX=1 transmits one test packet using the AT+TCONF RF parameters.
-        // Payload is a fixed counter pattern (not our frame), but this verifies
-        // the RF path is alive. Ground station will report a CRC error — that's expected.
-        // TODO: replace with proper dumb-mode RadioLib TX once RF path is confirmed.
-        // LoRa TX disabled — Vision Shield AT commands don't support raw P2P TX.
-        // TODO: implement dumb-mode RadioLib TX (SPI bypass of Murata STM32L0).
-    }
 }

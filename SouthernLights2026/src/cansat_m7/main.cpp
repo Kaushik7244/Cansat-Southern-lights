@@ -127,7 +127,7 @@ static uint32_t g_last_gps_status_ms = 0;
 static const uint32_t TX_INTERVAL_MS         = 1000;   // transmit every 1 s
 static const uint32_t DRAIN_INTERVAL_MS      = 10000;  // flush SD every 10 s
 static const uint32_t NICLA_INTERVAL_MS      = 1000;   // poll Nicla at 1 Hz (each update blocks ~700 ms)
-static const uint32_t GPS_INTERVAL_MS        = 20;     // poll GPS at 50 Hz
+static const uint32_t GPS_INTERVAL_MS        = 100;    // poll GPS at 10 Hz (9600 baud ≈ 5 NMEA sentences/s)
 static const uint32_t GPS_STATUS_INTERVAL_MS = 5000;   // GPS acquisition status every 5 s
 
 // ---------------------------------------------------------------------------
@@ -281,10 +281,7 @@ void setup()
     // Radios — APC220 on IIC-UART ch1
     Serial.print("Telemetry init... ");
     if (telemetryInit(g_packet)) {
-        Serial.print("OK");
-        if (telemetryLoRaAvailable()) Serial.print(" (APC220 + LoRa)");
-        else                          Serial.print(" (APC220 only)");
-        Serial.println();
+        Serial.println("OK (APC220)");
     } else {
         Serial.println("WARNING — no radio available");
     }
@@ -454,7 +451,7 @@ void loop()
     }
 
 #ifndef ISOLATION_TEST
-    // GPS — rate-limited to 50 Hz to reduce Wire (I2C3) bus load shared with M4 BME688.
+    // GPS — rate-limited to 10 Hz to reduce Wire (I2C3) bus load on shared WK2132.
     // Skipped when IIC-UART failed — each attempt would block ~1 s on I2C timeout.
     if (g_iic_uart_ok && now_ms - g_last_gps_ms >= GPS_INTERVAL_MS) {
         gpsPoll(g_packet);
