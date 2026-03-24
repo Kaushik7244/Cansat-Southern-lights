@@ -23,6 +23,7 @@
 #include "Altitude.h"
 #include "Go_to_checkpoint.h"
 #include "shared_memory.h"
+#include "cam_capture.h"
 
 #ifdef CORE_CM7
 
@@ -61,7 +62,7 @@ int  WiFistatus = WL_IDLE_STATUS;
 // Navigation — hardware
 // ---------------------------------------------------------------------------
 #define SERVO_PIN_LEFT  PH_15
-#define SERVO_PIN_RIGHT PK_1
+#define SERVO_PIN_RIGHT PG_7    // moved from PK_1 (now used by camera TIM1_CH1)
 #define LEFT_NEUTRAL 90 
 #define RIGHT_NEUTRAL 90
 #define altitude_sim false
@@ -74,6 +75,9 @@ Servo break_right;
 Sensor          nicla_barometer(SENSOR_ID_BARO);
 Sensor          nicla_temp(SENSOR_ID_TEMP);
 SensorQuaternion nicla_ori(SENSOR_ID_GEORV);  // Geo-magnetic rotation vector
+
+// Camera — see cam_capture.h
+static bool g_cam_ok = false;
 
 // ---------------------------------------------------------------------------
 // Navigation — state
@@ -348,6 +352,11 @@ void setup()
 
 
 
+    // Camera — Vision Shield HM0360 (ext clock on PK_1 via TIM1_CH1)
+    Serial.print("Camera init... ");
+    g_cam_ok = camInit();
+    Serial.println(g_cam_ok ? "OK (HM0360 QVGA grayscale)" : "FAIL");
+
 #if defined(SLDEBUG) && defined(APC_ENABLED)
     // RF link verification — sends plain ASCII so PuTTY can confirm data arrives.
     // If "APC220 TEST" appears on COM14, the radio link is good.
@@ -367,6 +376,30 @@ void setup()
 void loop()
 {
     uint32_t now_ms = millis();
+
+    // First-loop camera burst — capture several images to SD for verification.
+    // Runs once, before any other loop work, so the SD bus is uncontested.
+    {
+        static bool s_done = false;
+        if (!s_done && g_cam_ok) {
+            s_done = true;
+            static const int NUM_CAPTURES = 5;
+            Serial.print("Capturing ");
+            Serial.print(NUM_CAPTURES);
+            Serial.println(" images to SD...");
+
+            for (int i = 0; i < NUM_CAPTURES; i++) {
+                char path[24];
+                snprintf(path, sizeof(path), "/fs/CAM_%04d.bmp", i + 1);
+                bool ok = camCaptureToSD(path);
+                Serial.print("  ");
+                Serial.print(path);
+                Serial.println(ok ? " OK" : " FAILED");
+                if (!ok) g_packet.m7_errors++;
+            }
+            Serial.println("Camera burst done.");
+        }
+    }
 
 #ifndef ISOLATION_TEST
     // Forward M4 RPC.print() output to USB Serial

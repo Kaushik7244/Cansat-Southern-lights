@@ -6,7 +6,10 @@
       "Bash(~/.platformio/penv/Scripts/pio run:*)",
       "Bash(grep -r 0x38000 /c/Users/hfa/.platformio/packages/framework-arduino-mbed --include=*.h --include=*.c --include=*.cpp --include=*.ld)",
       "Bash(find /c/Users/hfa/.platformio -type d -name *BHY2*)",
-      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)"
+      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)",
+      "Bash(find ~/.platformio/packages/framework-arduino-mbed-portenta -iname *camera* -type f)",
+      "Bash(find ~/.platformio/packages/ -maxdepth 1 -type d -name *portenta* -o -name *mbed* -o -name *stm32*)",
+      "Bash(find ~/.platformio/packages/framework-arduino-mbed/libraries -iname *camera* -type d)"
     ]
   }
 }
