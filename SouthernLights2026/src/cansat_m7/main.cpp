@@ -73,7 +73,7 @@ Servo break_right;
 // Nicla Sense ME sensors via BHY2Host
 Sensor          nicla_barometer(SENSOR_ID_BARO);
 Sensor          nicla_temp(SENSOR_ID_TEMP);
-SensorQuaternion nicla_ori(SENSOR_ID_GEORV);  // Geo-magnetic rotation vector (accel + gyro + magnetometer fusion)
+SensorQuaternion nicla_ori(SENSOR_ID_GEORV);  // Geo-magnetic rotation vector
 
 // ---------------------------------------------------------------------------
 // Navigation — state
@@ -470,9 +470,18 @@ void loop()
 #endif
 #endif
 
-    // Push current flight state into Backup SRAM so M4 can stamp LoRa packets correctly.
-    // Backup SRAM is non-cacheable (MPU region 7), so this write is safe and visible to M4.
-    M4_SHARED->m7_flight_state = g_packet.state;
+    // Push M7 data into Backup SRAM so M4 can include it in LoRa packets.
+    // Backup SRAM is non-cacheable (MPU region 7), so writes are visible to M4 immediately.
+    M4_SHARED->m7_flight_state    = g_packet.state;
+    M4_SHARED->nicla_temperature2 = g_packet.primary.temperature2;
+    M4_SHARED->nicla_pressure2    = g_packet.primary.pressure2;
+    M4_SHARED->gps_latitude       = g_packet.secondary.latitude;
+    M4_SHARED->gps_longitude      = g_packet.secondary.longitude;
+    M4_SHARED->gps_altitude       = g_packet.secondary.altitude_gps;
+    M4_SHARED->gps_speed          = g_packet.secondary.speed_ms;
+    M4_SHARED->gps_heading        = g_packet.secondary.heading;
+    M4_SHARED->gps_satellites     = g_packet.secondary.gps_satellites;
+    M4_SHARED->gps_fix            = g_packet.secondary.gps_fix;
 
     // Navigation — flight state machine and servo control
     navigationUpdate();
@@ -535,8 +544,8 @@ void navigationSetup()
     Serial.print("Nicla Sense init (ESLOV I2C)... ");
     if (BHY2Host.begin(false, NICLA_VIA_ESLOV)) {
         Wire.setTimeout(200);  // BHY2Host.begin() calls Wire.begin(), resetting timeout
-        nicla_barometer.begin(1, 0);
         nicla_temp.begin(1, 0);
+        nicla_barometer.begin(1, 0);
         nicla_ori.begin(10, 0);
         nicla_active = true;
         Serial.println("OK");

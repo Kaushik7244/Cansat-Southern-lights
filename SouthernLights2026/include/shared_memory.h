@@ -103,11 +103,24 @@ struct M4SharedData {
     // --- Consistency guard (written by M4) ----------------------------------
     volatile uint32_t seq_done;
 
-    // --- Flight state (written by M7, read by M4) ---------------------------
+    // --- M7 → M4 data (written by M7, read by M4) ---------------------------
     // M4 has no flight state machine — it uses this to stamp LoRa packets with
     // the correct state (ASCENT, DESCENT, etc.) instead of always sending PAD.
     // Single-byte write is atomic on ARM; no sequence guard needed.
     FlightState m7_flight_state;
+
+    // Nicla Sense data (written by M7 after BHY2Host.update())
+    float    nicla_temperature2;  // °C  — BMP390 via Nicla
+    float    nicla_pressure2;     // hPa — BMP390 via Nicla
+
+    // GPS data (written by M7 after gpsPoll())
+    float    gps_latitude;
+    float    gps_longitude;
+    float    gps_altitude;
+    float    gps_speed;
+    float    gps_heading;
+    uint8_t  gps_satellites;
+    bool     gps_fix;
 };
 
 // Typed pointer to the shared region — same physical address on both cores.

@@ -102,20 +102,22 @@ static void loraSendBME()
     tx.state         = M4_SHARED->m7_flight_state;  // kept current by M7 via shared SRAM
     tx.m4_errors     = g_lora_errors;
     tx.m7_errors     = 0;
+    tx.flags         = (M4_SHARED->nicla_temperature2 != 0.0f) ? FLAG_NICLA_BLE_OK : 0;
 
     tx.primary.temperature   = temperature;
     tx.primary.pressure      = pressure;
     tx.primary.humidity      = humidity;
     tx.primary.altitude_baro = altitude;
-    tx.primary.temperature2  = 0.0f;   // BMP390 not available on M4
-    tx.primary.pressure2     = 0.0f;
+    tx.primary.temperature2  = M4_SHARED->nicla_temperature2;
+    tx.primary.pressure2     = M4_SHARED->nicla_pressure2;
 
-    // secondary — GPS lives on M7; LoRa carries zeros until a safe pull mechanism is added
-    tx.secondary.latitude       = 0.0f;
-    tx.secondary.longitude      = 0.0f;
-    tx.secondary.altitude_gps   = 0.0f;
-    tx.secondary.gps_satellites = 0;
-    tx.secondary.gps_fix        = false;
+    tx.secondary.latitude       = M4_SHARED->gps_latitude;
+    tx.secondary.longitude      = M4_SHARED->gps_longitude;
+    tx.secondary.altitude_gps   = M4_SHARED->gps_altitude;
+    tx.secondary.speed_ms       = M4_SHARED->gps_speed;
+    tx.secondary.heading        = M4_SHARED->gps_heading;
+    tx.secondary.gps_satellites = M4_SHARED->gps_satellites;
+    tx.secondary.gps_fix        = M4_SHARED->gps_fix;
 
     const uint8_t plen = sizeof(TxPacket);
     uint8_t frame[2 + 1 + plen + 2];
