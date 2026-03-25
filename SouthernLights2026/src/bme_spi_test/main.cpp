@@ -67,6 +67,13 @@ void setup()
     }
     SPI.end();
 
+    // Re-latch CS after probe — BME688 needs CS LOW→HIGH with SPI active
+    digitalWrite(BME_CS, LOW);
+    delayMicroseconds(100);
+    SPI.begin();
+    digitalWrite(BME_CS, HIGH);
+    delay(10);
+
     uint8_t rslt = bme.begin();
     if (rslt != 0) {
         Serial.print("bme.begin() FAILED — result: ");

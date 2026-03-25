@@ -377,13 +377,13 @@ void loop()
 {
     uint32_t now_ms = millis();
 
-    // First-loop camera burst — capture several images to SD for verification.
+    // First-loop camera burst — capture 3 images to SD for verification.
     // Runs once, before any other loop work, so the SD bus is uncontested.
     {
         static bool s_done = false;
         if (!s_done && g_cam_ok) {
             s_done = true;
-            static const int NUM_CAPTURES = 5;
+            static const int NUM_CAPTURES = 3;
             Serial.print("Capturing ");
             Serial.print(NUM_CAPTURES);
             Serial.println(" images to SD...");
@@ -401,10 +401,27 @@ void loop()
         }
     }
 
+    // Periodic camera capture — one image every 10 seconds, named by millis
+    {
+        static uint32_t s_last_cam_ms = 0;
+        if (g_cam_ok && now_ms - s_last_cam_ms >= 5000) {
+            s_last_cam_ms = now_ms;
+            char path[32];
+            snprintf(path, sizeof(path), "/fs/IMG_%lu.bmp", (unsigned long)now_ms);
+            bool ok = camCaptureToSD(path);
+#ifdef SLDEBUG
+            Serial.print("  cam: ");
+            Serial.print(path);
+            Serial.println(ok ? " OK" : " FAIL");
+#endif
+            if (!ok) g_packet.m7_errors++;
+        }
+    }
+
 #ifndef ISOLATION_TEST
     // Forward M4 RPC.print() output to USB Serial
     // Limit to 64 bytes per loop to avoid blocking if M4 floods the channel.
-    { int rpc_n = 0; while (RPC.available() && rpc_n < 64) { Serial.write(RPC.read()); rpc_n++; } }
+    { int rpc_n = 0; while (RPC.available() && rpc_n < 512) { Serial.write(RPC.read()); rpc_n++; } }
 
     // APC220 time sync command from ground station.
     // Ground operator sends: TIME:<unix_epoch>   e.g. TIME:1742123456
@@ -478,9 +495,17 @@ void loop()
     }
 
     if (nicla_active && now_ms - g_last_nicla_ms >= NICLA_INTERVAL_MS) {
+        uint32_t t0 = millis();
         BHY2Host.update();
-        niclaUpdate();
-        g_last_nicla_ms = now_ms;
+        uint32_t dt = millis() - t0;
+        if (dt > 500) {
+            // BHY2Host.update() blocked — back off to 2 s to protect GPS/telemetry
+            // but keep retrying so Nicla recovers automatically
+            g_last_nicla_ms = now_ms + 2000;
+        } else {
+            niclaUpdate();
+            g_last_nicla_ms = now_ms;
+        }
     }
 
 #ifndef ISOLATION_TEST
@@ -578,6 +603,7 @@ void navigationSetup()
         nicla_barometer.begin(1, 0);
         nicla_ori.begin(10, 0);
         nicla_active = true;
+        g_last_nicla_ms = millis() + 3000;  // let BHY2 sensors warm up before first poll
         Serial.println("OK");
     } else {
         nicla_active = false;

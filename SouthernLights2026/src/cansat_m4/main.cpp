@@ -281,6 +281,16 @@ void loop()
     gasresistance = bme.readGasResistance();           // Ω
     altitude      = bme.readAltitude();                // m
 
+#ifdef SLDEBUG
+    {
+        char dbg[120];
+        snprintf(dbg, sizeof(dbg),
+                 "BME688 #%d: T=%.2f P=%.2f H=%.2f G=%.0f A=%.1f\r\n",
+                 localLoop, temperature, pressure, humidity,
+                 gasresistance, altitude);
+        RPC.print(dbg);
+    }
+#endif
 
     logSample();
 

@@ -442,8 +442,8 @@ bool camInit() {
         return false;
     }
 
-    // Restore Wire for WK2132 / Nicla (400 kHz)
-    Wire.setClock(400000);
+    // Restore Wire for WK2132 / Nicla — 100 kHz is safe for WK2132
+    Wire.setClock(100000);
     Wire.setTimeout(200);
 
     s_ok = true;

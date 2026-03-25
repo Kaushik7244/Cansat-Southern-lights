@@ -1,0 +1,1 @@
+seq,ts_ms,utc_ts,state,temp1,press1,hum,alt_baro,temp2,press2,lat,lon,alt_gps,speed_ms,heading,gps_sats,gps_fix,mag_x,mag_y,mag_z,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,gas_res,m4_err,m7_err
